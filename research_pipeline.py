@@ -97,6 +97,7 @@ def main():
     p.add_argument("--end",default=datetime.now(de.UTC).strftime("%Y-%m-%d"))
     p.add_argument("--kinds",nargs="+",choices=list(aux.KINDS),default=list(aux.KINDS))
     p.add_argument("--tf",nargs="+",choices=["5m","15m","30m","1h","4h","8h","12h","1d"],default=["15m","1h","4h","1d"])
+    p.add_argument("--repair",action="store_true",help="Recheck auxiliary archives even when cached")
     args=p.parse_args()
     start,end=de.date(args.start),de.date(args.end)
     if start>=end:p.error("start must precede end")
@@ -129,7 +130,7 @@ def main():
                 de.download(args.root,symbol,start_symbol,end_symbol)
                 de.resample(args.root,symbol)
                 for kind in args.kinds:
-                    aux.download(args.root,symbol,kind,start_symbol,end_symbol)
+                    aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair)
                 audit(args.root,symbol)
         except Exception as e:
             failures.append(symbol)
