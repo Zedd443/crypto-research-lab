@@ -1,5 +1,11 @@
 """Discover actual archive months before downloading; audit without imputing data."""
 import argparse
+import os
+import multiprocessing as mp
+import time
+
+# Each spawned worker has its own HTTP session and bounded Polars thread pool.
+os.environ.setdefault('POLARS_MAX_THREADS', '2')
 import json
 import re
 import math
@@ -88,6 +94,43 @@ def audit(root,symbol):
     save_json(root/"metadata"/symbol/"cross_dataset_audit.json",report)
     print(symbol,"audited",len(report),"months",flush=True)
 
+def run_symbol(task):
+    args,symbol,start,end=task
+    print(symbol,"START",flush=True)
+    try:
+        if args.command=="discover":discover(args.root,symbol)
+        elif args.command=="audit":audit(args.root,symbol)
+        elif args.command=="compare":
+            report={p.stem:{tf:native_compare(args.root,symbol,tf,p.stem) for tf in args.tf}
+                    for p,a,b in aux.coverage(args.root,symbol) if a<de.ms(end) and b>de.ms(start)}
+            save_json(args.root/"metadata"/symbol/"native_comparison.json",report)
+            print(symbol,json.dumps(report),flush=True)
+        else:
+            stamps=discover(args.root,symbol)
+            # Skip only months before first and after last known archive when the
+            # contract is confirmed delisted; active or unknown status stays open.
+            from universe import UNIVERSE
+            if not stamps:raise ValueError("No monthly archive found; inspect symbol manually")
+            first=de.date(stamps[0]+"-01")
+            last=de.date(stamps[-1]+"-01")
+            bound_end=(last+timedelta(days=32)).replace(day=1)
+            # Include a trailing month for possible final partial daily archive.
+            if symbol in UNIVERSE["delisted"]:
+                bound_end=(bound_end+timedelta(days=32)).replace(day=1)
+                end_symbol=min(end,bound_end)
+            else:end_symbol=end
+            start_symbol=max(start,first)
+            if start_symbol>=end_symbol:return symbol,None
+            de.download(args.root,symbol,start_symbol,end_symbol)
+            de.resample(args.root,symbol)
+            for kind in args.kinds:
+                aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair)
+            audit(args.root,symbol)
+        return symbol,None
+    except Exception as e:
+        print(symbol,"FAILED",repr(e),flush=True)
+        return symbol,repr(e)
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("command",choices=["discover","download","audit","compare"])
@@ -98,42 +141,29 @@ def main():
     p.add_argument("--kinds",nargs="+",choices=list(aux.KINDS),default=list(aux.KINDS))
     p.add_argument("--tf",nargs="+",choices=["5m","15m","30m","1h","4h","8h","12h","1d"],default=["15m","1h","4h","1d"])
     p.add_argument("--repair",action="store_true",help="Recheck auxiliary archives even when cached")
+    p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
     start,end=de.date(args.start),de.date(args.end)
     if start>=end:p.error("start must precede end")
+    symbols=list(dict.fromkeys(args.symbols))
+    tasks=[(args,symbol,start,end) for symbol in symbols]
+    workers=min(args.workers if args.workers is not None else (4 if args.command=="download" else 1),len(tasks))
     failures=[]
-    for symbol in args.symbols:
-        try:
-            if args.command=="discover":discover(args.root,symbol)
-            elif args.command=="audit":audit(args.root,symbol)
-            elif args.command=="compare":
-                report={p.stem:{tf:native_compare(args.root,symbol,tf,p.stem) for tf in args.tf}
-                        for p,a,b in aux.coverage(args.root,symbol) if a<de.ms(end) and b>de.ms(start)}
-                save_json(args.root/"metadata"/symbol/"native_comparison.json",report)
-                print(symbol,json.dumps(report),flush=True)
-            else:
-                stamps=discover(args.root,symbol)
-                # Skip only months before first and after last known archive when the
-                # contract is confirmed delisted; active or unknown status stays open.
-                from universe import UNIVERSE
-                if not stamps:raise ValueError("No monthly archive found; inspect symbol manually")
-                first=de.date(stamps[0]+"-01")
-                last=de.date(stamps[-1]+"-01")
-                bound_end=(last+timedelta(days=32)).replace(day=1)
-                # Include a trailing month for possible final partial daily archive.
-                if symbol in UNIVERSE["delisted"]:
-                    bound_end=(bound_end+timedelta(days=32)).replace(day=1)
-                    end_symbol=min(end,bound_end)
-                else:end_symbol=end
-                start_symbol=max(start,first)
-                if start_symbol>=end_symbol:continue
-                de.download(args.root,symbol,start_symbol,end_symbol)
-                de.resample(args.root,symbol)
-                for kind in args.kinds:
-                    aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair)
-                audit(args.root,symbol)
-        except Exception as e:
-            failures.append(symbol)
-            print(symbol,"FAILED",repr(e),flush=True)
+    begun=time.monotonic()
+    print(f"Running {len(tasks)} unique pairs with {workers} worker(s)",flush=True)
+    def consume(results):
+        for done,(symbol,error) in enumerate(results,1):
+            if error:failures.append(symbol)
+            elapsed=(time.monotonic()-begun)/60
+            print(f"[{done}/{len(tasks)}] {symbol} {'FAILED' if error else 'DONE'} | elapsed {elapsed:.1f} min",flush=True)
+    if workers==1:
+        consume(map(run_symbol,tasks))
+    else:
+        # Spawn is explicit for consistent Windows/Linux behavior. On Ctrl+C the
+        # pool context terminates workers; finished atomic Parquet files survive.
+        with mp.get_context("spawn").Pool(workers) as pool:
+            consume(pool.imap_unordered(run_symbol,tasks,chunksize=1))
     if failures:raise SystemExit("Failed: "+", ".join(failures))
-if __name__=="__main__":main()
+if __name__=="__main__":
+    mp.freeze_support()
+    main()
