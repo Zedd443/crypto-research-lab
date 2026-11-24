@@ -82,7 +82,7 @@ def audit(root,symbol):
                 info["expected_grid_rows"]=expected.height
                 info["missing_grid_rows"]=expected.join(f.select("event_time"),on="event_time",how="anti").height
             else:
-                info["interval_minutes_observed"]=f["event_time"].diff().drop_nulls().unique().sort().truediv(60000).to_list()
+                info["interval_minutes_observed"]=(f["event_time"].diff().drop_nulls().unique().sort() / 60000).to_list()
             row[kind]=info
         report.append(row)
     save_json(root/"metadata"/symbol/"cross_dataset_audit.json",report)
