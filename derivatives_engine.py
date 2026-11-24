@@ -62,18 +62,50 @@ def coverage(root,symbol):
         f=pl.read_parquet(p,columns=["open_time"])
         if f.height: yield p, f["open_time"].min(),f["open_time"].max()+MINUTE
 
-def download(root,symbol,kind,start,end):
+def cached_partition(target, marker, a, b, kind, repair=False):
+    """A completed retrieval attempt is not proof of complete observations."""
+    if repair or not marker.exists():
+        return False
+    try:
+        meta=json.loads(marker.read_text())
+        if meta.get("requested") != [a,b]:
+            return False
+        if target.exists():
+            frame=pl.read_parquet(target).filter(pl.col("event_time").is_between(a,b,closed="left"))
+            if frame.height != meta.get("rows") or frame["event_time"].n_unique()!=frame.height:
+                return False
+        elif meta.get("rows") != 0:
+            return False
+        if meta.get("complete") and target.exists():
+            return True
+        # Freeze historical retrieval attempts only after the archive has had
+        # time to publish. Recent partial data remains eligible for retry.
+        historical=b <= ms(datetime.now(UTC)-timedelta(days=45))
+        if not historical:
+            return False
+        if meta.get("retrieval_finished") is True:
+            return True
+        # Legacy metrics marker was written only after the full daily loop.
+        # Missing observations and 404 days remain visible in the audit.
+        if kind=="metrics" and isinstance(meta.get("missing_archive_days"),list):
+            return True
+        # Legacy funding may have silently stopped on HTTP 400. Recheck once.
+        return False
+    except (OSError, ValueError, pl.exceptions.PolarsError, KeyError):
+        return False
+
+def download(root,symbol,kind,start,end,repair=False):
     for p,first,last in coverage(root,symbol):
         a,b=max(first,ms(start)),min(last,ms(end))
         if a>=b:continue
         target=root/kind/symbol/p.name
         marker=target.with_suffix(".json")
-        if target.exists() and marker.exists():
-            meta=json.loads(marker.read_text())
-            if meta.get("requested")==[a,b] and meta.get("complete"): 
-                print(symbol,kind,p.stem,"cached");continue
+        if cached_partition(target,marker,a,b,kind,repair):
+            print(symbol,kind,p.stem,"cached (retrieval; see quality audit)",flush=True)
+            continue
         parts=[]
         missing=[]
+        retrieval_finished=True
         if target.exists(): parts.append(pl.read_parquet(target))
         if kind!="metrics":
             f=fetch(kind,symbol,"monthly",p.stem)
@@ -88,7 +120,10 @@ def download(root,symbol,kind,start,end):
             cursor=a
             while cursor<b:
                 r=SESSION.get(API+"/fapi/v1/fundingRate",params={"symbol":symbol,"startTime":cursor,"endTime":b-1,"limit":1000},timeout=30)
-                if r.status_code==400:break
+                if r.status_code==400:
+                    retrieval_finished=False
+                    print(symbol,kind,p.stem,"funding REST rejected request",r.text[:200],flush=True)
+                    break
                 r.raise_for_status()
                 page=r.json()
                 if not page:break
@@ -106,9 +141,19 @@ def download(root,symbol,kind,start,end):
             count=requested.height
             if kind in ("mark","index","premium","spot"):
                 complete=(count==(b-a)//MINUTE and requested["event_time"].min()==a and requested["event_time"].max()==b-MINUTE and requested["event_time"].diff().drop_nulls().eq(MINUTE).all())
-            # Event and metrics coverage cannot be inferred safely from count alone.
+            if kind=="metrics":
+                step=300000
+                expected=(b+step-1)//step-(a+step-1)//step
+                complete=(count==expected and count>0 and
+                          (requested["event_time"] % step).eq(0).all() and
+                          requested["event_time"].diff().drop_nulls().eq(step).all() and
+                          all(requested[col].null_count()==0 for col in METRICS))
+            # Funding uses actual historical settlement intervals; never assume 8h.
         marker.parent.mkdir(parents=True,exist_ok=True)
-        marker.write_text(json.dumps({"requested":[a,b],"rows":count,"missing_archive_days":missing,"complete":complete,"note":"Coverage not guaranteed; no imputation. Funding and metrics require separate schedule audit."},indent=2))
+        marker.write_text(json.dumps({"requested":[a,b],"rows":count,"missing_archive_days":missing,"complete":complete,
+            "retrieval_finished":retrieval_finished,
+            "quality_status":"COMPLETE" if complete else ("NO_OBSERVATIONS" if count==0 else "PARTIAL_OR_UNVERIFIED"),
+            "note":"Retrieval status is independent of observation coverage. No imputation. Funding requires schedule audit."},indent=2))
         print(symbol,kind,p.stem,count,"rows",flush=True)
 
 def audit(root,symbol):
@@ -129,12 +174,13 @@ def main():
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--start",default="2019-09-01")
     p.add_argument("--end",default=datetime.now(UTC).strftime("%Y-%m-%d"))
+    p.add_argument("--repair",action="store_true",help="Recheck archives even when cached")
     a=p.parse_args()
     failed=[]
     for s in a.symbols:
         if a.command=="audit":audit(a.root,s);continue
         for k in a.kinds:
-            try:download(a.root,s,k,date(a.start),date(a.end))
+            try:download(a.root,s,k,date(a.start),date(a.end),repair=a.repair)
             except Exception as e:
                 print(s,k,"FAILED",repr(e),flush=True);failed.append((s,k))
     if failed:raise SystemExit(str(failed))
