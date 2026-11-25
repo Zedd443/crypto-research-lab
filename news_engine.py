@@ -19,6 +19,8 @@ ALIASES = {
     "XAUUSDT": ["gold", "bullion"], "QQQUSDT": ["nasdaq", "qqq"],
     "SPYUSDT": ["s&p 500", "sp500", "spy"], "NVDAUSDT": ["nvidia", "nvda"],
     "AAPLUSDT": ["apple inc", "apple earnings", "aapl"],
+    "CLUSDT": ["wti", "west texas intermediate", "crude oil", "opec", "oil inventories"],
+    "BZUSDT": ["brent", "crude oil", "opec", "oil inventories"],
 }
 def now_ms():
     return int(time.time()*1000)
