@@ -148,7 +148,20 @@ def main():
     code=digest([Path(__file__),Path(__file__).with_name("feature_engine.py"),Path(__file__).with_name("validation_protocol.py")])
     cols=FEATURES if a.aux else BASE_FEATURES
     # One coordinator, bounded internal threads. No concurrent copies of fold matrices.
-    budget(1,per_worker_bytes=2*1024**3,threads_per_worker=a.threads)
+    # Small single-symbol hourly pilot: imports are already resident at this point.
+    # Estimates are incremental headroom, not measured peak training RSS.
+    small_pilot=(len(set(a.symbols))==1 and a.tf=="1h" and a.train_days<=180
+                 and a.test_days<=30 and a.threads<=2 and not a.aux)
+    estimate_mib=({"ridge":512,"logistic":512,"rf":768,"xgb":768}[a.model]
+                  if small_pilot else 2048)
+    try:
+        budget(1,per_worker_bytes=estimate_mib*1024**2,threads_per_worker=a.threads)
+    except MemoryError as exc:
+        import psutil
+        available=psutil.virtual_memory().available/1024**2
+        raise MemoryError(f"{a.model}: available {available:.0f} MiB; "
+                          f"estimated requirement {estimate_mib+1024} MiB including reserve") from exc
+    print(f"Resource preflight: {a.model}, estimated additional headroom {estimate_mib} MiB + 1024 MiB reserve",flush=True)
     spec={"manifest_id":protocol["manifest_id"],"code":code,"sklearn":sklearn.__version__,
           "polars":pl.__version__,"model":a.model,"features":cols,"tf":a.tf,"horizon":a.horizon,
           "seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
