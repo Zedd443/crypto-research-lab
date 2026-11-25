@@ -41,7 +41,7 @@ def data_report(root):
         f=pl.read_parquet(paths).sort("open_time")
         f=f.with_columns(pl.when(pl.col("open_time").diff()==3600000).then(pl.col("close").log().diff()).alias("return"))
         eda=stats(f,"return")
-        eda["acf"]={str(k):f.select(pl.corr("return",pl.col("return").shift(k))).item() for k in (1,4,24)}
+        eda["acf"]={str(k):f.select(pl.corr("return",pl.when(pl.col("open_time")-pl.col("open_time").shift(k)==k*3600000).then(pl.col("return").shift(k)))).item() for k in (1,4,24)}
         eda["acf"]={k:v if v is not None and math.isfinite(v) else None for k,v in eda["acf"].items()}
     return {"symbols":result,"btc_1h_eda":eda,"status":"WARNING","note":"Metadata coverage is not independent raw verification; calendar audit pending."}
 
@@ -72,7 +72,7 @@ def feature_report(root,start,end):
             "invalid":invalid,"duplicates":y.height-y["decision_time"].n_unique()}
     duplicates=f.height-f["decision_time"].n_unique()
     ages={c:{"negative":f.filter(pl.col(c)<0).height,"nulls":f[c].null_count()} for c in f.columns if c.endswith("_age_ms")}
-    failed=duplicates or any(x["negative"] for x in ages.values()) or any(x["invalid"] or x["duplicates"] for x in labels.values())
+    failed=not labels or duplicates or any(x["negative"] for x in ages.values()) or any(x["invalid"] or x["duplicates"] for x in labels.values())
     return {"status":"FAIL" if failed else "WARNING","rows":f.height,"duplicates":duplicates,"features":{c:stats(f,c) for c in cols},
             "high_correlation_pairs":pairs,"labels":labels,"auxiliary_ages":ages,
             "note":"Development only; correlation diagnostic, not feature selection. Assumed publication lags remain unverified."}
@@ -107,7 +107,7 @@ def main():
     with zipfile.ZipFile(temp,"w",zipfile.ZIP_DEFLATED) as z:
         z.writestr("manifest.json",json.dumps(manifest,indent=2))
         z.writestr("metrics.json",json.dumps(metrics,indent=2,allow_nan=False))
-        for f in files:z.write(f,str(f.relative_to(root)))
+        for f in sorted(set(files)):z.write(f,str(f.relative_to(root)))
     temp.replace(out)
     print(out,metrics["status"],flush=True)
     if metrics["status"]=="FAIL":raise SystemExit(1)
