@@ -37,8 +37,7 @@ def inventory(symbol):
     return sorted({m.group(1) for k in keys if (m:=pattern.search(k))})
 
 def save_json(path,obj):
-    path.parent.mkdir(parents=True,exist_ok=True)
-    path.write_text(json.dumps(obj,indent=2))
+    de.write_json(path,obj)
 
 def discover(root,symbol):
     stamps=inventory(symbol)
@@ -57,15 +56,20 @@ def native_compare(root,symbol,tf,stamp):
     p=root/"resampled"/symbol/tf/(stamp+".parquet")
     if not p.exists():return {"status":"resampled_missing"}
     actual=pl.read_parquet(p)
+    if actual["open_time"].n_unique()!=actual.height or native["open_time"].n_unique()!=native.height:
+        raise ValueError("Duplicate native or resampled candle timestamps")
     joined=actual.join(native,on="open_time",suffix="_native")
     mismatches={}
     for c in de.FIELDS:
         if c=="open_time":continue
         x=pl.col(c);y=pl.col(c+"_native")
         tol=0 if c in ("trades","close_time") else 1e-8
-        mismatches[c]=joined.filter((x-y).abs()>tol*(1+y.abs())).height
-    return {"status":"compared","matched_rows":joined.height,"native_rows":native.height,
-            "resampled_rows":actual.height,"mismatches":mismatches}
+        mismatches[c]=joined.filter(x.is_null() | y.is_null() | ~x.is_finite() | ~y.is_finite() | ((x-y).abs()>tol*(1+y.abs()))).height
+    missing=native.join(actual.select("open_time"),on="open_time",how="anti").height
+    extra=actual.join(native.select("open_time"),on="open_time",how="anti").height
+    passed=bool(joined.height and not missing and not extra and not any(mismatches.values()))
+    return {"status":"passed" if passed else "mismatch","matched_rows":joined.height,"native_rows":native.height,
+            "resampled_rows":actual.height,"missing_native_timestamps":missing,"extra_resampled_timestamps":extra,"mismatches":mismatches}
 
 def audit(root,symbol):
     aux.audit(root,symbol)
@@ -105,6 +109,8 @@ def run_symbol(task):
                     for p,a,b in aux.coverage(args.root,symbol) if a<de.ms(end) and b>de.ms(start)}
             save_json(args.root/"metadata"/symbol/"native_comparison.json",report)
             print(symbol,json.dumps(report),flush=True)
+            if not report or any(v["status"]!="passed" for month in report.values() for v in month.values()):
+                raise ValueError("Native comparison incomplete or mismatched; inspect report")
         else:
             stamps=discover(args.root,symbol)
             # Skip only months before first and after last known archive when the
@@ -128,7 +134,7 @@ def run_symbol(task):
                     errors[stage]=repr(exc)
                     print(symbol,stage,"FAILED",repr(exc),flush=True)
             attempt("ohlcv",lambda:de.download(args.root,symbol,start_symbol,end_symbol,repair=args.repair))
-            attempt("resample",lambda:de.resample(args.root,symbol))
+            attempt("resample",lambda:de.resample(args.root,symbol,force=args.repair))
             for kind in args.kinds:
                 if symbol in TRADFI_SYMBOLS and kind=="spot":continue
                 attempt(kind,lambda:aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair))
@@ -149,7 +155,7 @@ def main():
     p.add_argument("--end",default=datetime.now(de.UTC).strftime("%Y-%m-%d"))
     p.add_argument("--kinds",nargs="+",choices=list(aux.KINDS),default=list(aux.KINDS))
     p.add_argument("--tf",nargs="+",choices=["5m","15m","30m","1h","4h","8h","12h","1d"],default=["15m","1h","4h","1d"])
-    p.add_argument("--repair",action="store_true",help="Recheck auxiliary archives even when cached")
+    p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
     start,end=de.date(args.start),de.date(args.end)
