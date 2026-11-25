@@ -7,12 +7,13 @@ import multiprocessing as mp
 os.environ.setdefault('POLARS_MAX_THREADS','1')
 from datetime import timedelta
 import json
+import hashlib
 from pathlib import Path
 import polars as pl
 import data_engine as de
 from universe import SYMBOLS
 
-VERSION=1
+VERSION=hashlib.sha256(Path(__file__).read_bytes()+Path(de.__file__).read_bytes()+pl.__version__.encode()).hexdigest()
 STEPS={"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000}
 LOOKBACK=200
 HORIZONS_H=(1,4,8,24)
