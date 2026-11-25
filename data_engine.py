@@ -30,7 +30,8 @@ def ms(d):
     return int(d.timestamp()*1000)
 
 def date(s):
-    return datetime.fromisoformat(s).replace(tzinfo=UTC)
+    d=datetime.fromisoformat(s)
+    return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
 
 def months(start,end):
     cur = start.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
@@ -108,13 +109,28 @@ def clean(frame,start,end):
     return f
 
 def gaps(f,start,end):
-    cursor=start
-    for t in f["open_time"]:
-        if t>cursor:
-            yield cursor,t
-        cursor=t+MINUTE
-    if cursor<end:
-        yield cursor,end
+    """Find missing spans with vectorized differences; input sorted and unique."""
+    if not f.height:
+        if start<end: yield start,end
+        return
+    t=f["open_time"]
+    first,last=t[0],t[-1]
+    if first>start: yield start,first
+    holes=f.select(pl.col("open_time").shift(1).alias("previous"),pl.col("open_time")).filter(
+        pl.col("open_time")-pl.col("previous")>MINUTE)
+    for previous,current in holes.iter_rows():
+        yield previous+MINUTE,current
+    if last+MINUTE<end: yield last+MINUTE,end
+
+def write_json(path,obj):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(obj,indent=2),encoding="utf-8")
+    tmp.replace(path)
+
+def signature(path):
+    s=path.stat()
+    return [s.st_size,s.st_mtime_ns]
 
 def atomic_write(f,path):
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -180,6 +196,8 @@ def download(root,symbol,start,end,repair=False):
         print(symbol,month.date(),merged.height,"missing minutes",sum((y-x)//MINUTE for x,y in remaining),flush=True)
 
 def aggregate(f,tf):
+    if f["open_time"].n_unique()!=f.height:
+        raise ValueError("Duplicate input timestamps in aggregation")
     f=f.sort("open_time").with_columns(pl.from_epoch("open_time",time_unit="ms").dt.replace_time_zone("UTC").alias("ts"))
     # Calendar-aligned windows, Monday start for weekly bars.
     n={"m":1,"h":60,"d":1440,"w":10080}[tf[-1]]*int(tf[:-1])
@@ -191,18 +209,38 @@ def aggregate(f,tf):
         .with_columns(pl.col("ts").dt.epoch("ms").alias("open_time"))
         .with_columns((pl.col("open_time")+n*MINUTE-1).alias("close_time")).drop("ts").select(FIELDS))
 
-def resample(root,symbol):
+def resample(root,symbol,force=False):
+    """Cache derived bars per partition and dependency; preserve weekly boundaries."""
     paths=sorted((root/"futures"/symbol/"1m").glob("*.parquet"))
-    # Process one month at a time, carrying a 7-day lookback for weekly boundary bars.
-    tail=parse_rows([])
-    for i,p in enumerate(paths):
-        f=pl.read_parquet(p)
-        combined=pl.concat([tail,f]).sort("open_time")
+    previous=None
+    for p in paths:
         lower=ms(date(p.stem+"-01"))
-        for tf in TIMEFRAMES:
+        prev=previous if previous is not None and date(previous.stem+"-01") >= date(p.stem+"-01")-timedelta(days=32) else None
+        deps={p.name:signature(p)}
+        if prev is not None: deps[prev.name]=signature(prev)
+        marker=root/"metadata"/symbol/"resample"/(p.stem+".json")
+        targets={tf:root/"resampled"/symbol/tf/p.name for tf in TIMEFRAMES}
+        try:
+            old=json.loads(marker.read_text())
+        except (OSError,ValueError):
+            old={}
+        if not force and old.get("version")==2 and old.get("sources")==deps and all(
+                v.exists() and old.get("outputs",{}).get(k)==signature(v) for k,v in targets.items()):
+            print(symbol,p.stem,"resample cached",flush=True)
+            previous=p
+            continue
+        f=pl.read_parquet(p)
+        if prev is not None:
+            tail=pl.scan_parquet(prev).filter(pl.col("open_time")>=lower-7*1440*MINUTE).collect()
+            combined=pl.concat([tail,f])
+        else:
+            combined=f
+        combined=clean(combined,lower-7*1440*MINUTE,ms((date(p.stem+"-01")+timedelta(days=32)).replace(day=1)))
+        for tf,target in targets.items():
             out=aggregate(combined,tf).filter(pl.col("close_time")>=lower)
-            atomic_write(out,root/"resampled"/symbol/tf/p.name)
-        tail=combined.tail(10080)
+            atomic_write(out,target)
+        write_json(marker,{"version":2,"sources":deps,"outputs":{k:signature(v) for k,v in targets.items()}})
+        previous=p
 
 def main():
     p=argparse.ArgumentParser()
@@ -223,7 +261,7 @@ def main():
             if a.command=="download":
                 download(a.root,symbol,date(a.start),end,repair=a.repair)
             else:
-                resample(a.root,symbol)
+                resample(a.root,symbol,force=a.repair)
         except Exception as e:
             print(symbol,"FAILED",repr(e),flush=True)
             failures.append(symbol)
