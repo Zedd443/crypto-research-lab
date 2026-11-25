@@ -121,12 +121,20 @@ def run_symbol(task):
             else:end_symbol=end
             start_symbol=max(start,first)
             if start_symbol>=end_symbol:return symbol,None
-            de.download(args.root,symbol,start_symbol,end_symbol)
-            de.resample(args.root,symbol)
+            errors={}
+            def attempt(stage,fn):
+                try:fn()
+                except Exception as exc:
+                    errors[stage]=repr(exc)
+                    print(symbol,stage,"FAILED",repr(exc),flush=True)
+            attempt("ohlcv",lambda:de.download(args.root,symbol,start_symbol,end_symbol,repair=args.repair))
+            attempt("resample",lambda:de.resample(args.root,symbol))
             for kind in args.kinds:
                 if symbol in TRADFI_SYMBOLS and kind=="spot":continue
-                aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair)
-            audit(args.root,symbol)
+                attempt(kind,lambda:aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair))
+            attempt("audit",lambda:audit(args.root,symbol))
+            save_json(args.root/"metadata"/symbol/"repair_queue.json",{"symbol":symbol,"start":start_symbol.isoformat(),"end":end_symbol.isoformat(),"errors":errors})
+            if errors:return symbol,json.dumps(errors)
         return symbol,None
     except Exception as e:
         print(symbol,"FAILED",repr(e),flush=True)
