@@ -27,7 +27,7 @@ def checkpoint(root,spec,fold_id,compute):
 
 def tune(root,spec,objective,total_trials=50,seed=42):
     """One coordinator per study; model internals may use bounded threads.
-    Abandoned RUNNING trials are marked FAIL on resume, not counted as completed.
+    Abandoned RUNNING trials are requeued with recorded parameters, then marked FAIL.
     Do not run two processes against the same study directory.
     """
     if total_trials<1:raise ValueError("Trial budget must be positive")
@@ -40,7 +40,11 @@ def tune(root,spec,objective,total_trials=50,seed=42):
         study=optuna.create_study(study_name=identity(spec),storage=storage,load_if_exists=True,
             direction="maximize",sampler=optuna.samplers.TPESampler(seed=seed),
             pruner=optuna.pruners.MedianPruner(n_startup_trials=5,n_warmup_steps=3))
-        for t in study.get_trials(deepcopy=False,states=(TrialState.RUNNING,)):
+        all_trials=study.get_trials(deepcopy=False)
+        for t in all_trials:
+            if t.state!=TrialState.RUNNING:continue
+            if not any(x.user_attrs.get("resume_of")==t.number for x in all_trials):
+                study.enqueue_trial(t.params,user_attrs={"resume_of":t.number})
             study.tell(t.number,state=TrialState.FAIL)
         done=len(study.get_trials(deepcopy=False,states=(TrialState.COMPLETE,TrialState.PRUNED)))
         if done<total_trials:
