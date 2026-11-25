@@ -11,7 +11,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, brier_score_loss
+from sklearn.metrics import mean_squared_error, mean_absolute_error, brier_score_loss, balanced_accuracy_score, confusion_matrix, log_loss
 from threadpoolctl import threadpool_limits
 import sklearn
 import data_engine as de
@@ -83,7 +83,11 @@ def fit_score(train,test,cols,model,params,threads,seed):
             base=np.full(len(yt),binary.mean())
             loss=brier_score_loss(target,pred)
             return {"score":-float(loss),"loss":float(loss),"baseline_loss":float(brier_score_loss(target,base)),
-                    "direction_accuracy":float(((pred>=.5)==target).mean()),"train_rows":len(y),"test_rows":len(yt)}
+                    "direction_accuracy":float(((pred>=.5)==target).mean()),
+                    "balanced_accuracy":float(balanced_accuracy_score(target,pred>=.5)),
+                    "confusion_matrix":confusion_matrix(target,pred>=.5,labels=[0,1]).tolist(),
+                    "log_loss":float(log_loss(target,pred,labels=[0,1])),
+                    "baseline_direction_accuracy":float(((base>=.5)==target).mean()),"train_rows":len(y),"test_rows":len(yt)}
         elif model=="rf":
             estimator=RandomForestRegressor(**params,n_jobs=threads,random_state=seed).fit(X,y)
         elif model=="xgb":
@@ -97,7 +101,10 @@ def fit_score(train,test,cols,model,params,threads,seed):
         pred=estimator.predict(Xt)
     loss=mean_squared_error(yt,pred)
     return {"score":-float(loss),"loss":float(loss),"baseline_loss":float(mean_squared_error(yt,np.zeros_like(yt))),
-            "mae":float(mean_absolute_error(yt,pred)),"direction_accuracy":float(((pred>0)==(yt>0)).mean()),
+            "mae":float(mean_absolute_error(yt,pred)),
+            "rmse":float(np.sqrt(loss)),
+            "oos_r2_zero":float(1-loss/np.mean(yt**2)) if np.mean(yt**2)>0 else None,
+            "direction_accuracy":float(((pred>0)==(yt>0)).mean()),
             "train_rows":len(y),"test_rows":len(yt)}
 
 def parameters(model,trial=None):
