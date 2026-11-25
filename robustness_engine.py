@@ -21,7 +21,13 @@ def ledger(root):
     f=pl.concat(parts).filter(pl.col("event_time").is_between(A,B,closed="left")).sort("event_time")
     expected=np.arange(A,B,8*3600000)
     t=f["event_time"].to_numpy()
-    if len(t)!=len(expected) or np.any(abs(t-expected)>60000) or f["mark_price"].null_count() or f["funding_interval_hours"].null_count() or not (f["funding_interval_hours"]==8).all():raise ValueError("Funding coverage or mark proxy incomplete")
+    grid=((t+30000)//(8*3600000))*(8*3600000)
+    diagnostic={"actual_events":len(t),"expected_events":len(expected),"missing_grid":np.setdiff1d(expected,grid).tolist(),"unexpected_grid":np.setdiff1d(grid,expected).tolist(),"duplicate_grid":len(grid)-len(np.unique(grid)),"off_grid_events":t[np.abs(t-grid)>60000].tolist(),"missing_mark_times":f.filter(pl.col("mark_price").is_null())["event_time"].to_list(),"null_interval_times":f.filter(pl.col("funding_interval_hours").is_null())["event_time"].to_list(),"non_8h_intervals":f.filter(pl.col("funding_interval_hours")!=8).select("event_time","funding_interval_hours").to_dicts()}
+    from data_engine import write_json
+    write_json(root/"reports"/"funding_diagnostic.json",diagnostic)
+    if len(t)!=len(expected) or np.any(abs(t-expected)>60000) or f["mark_price"].null_count() or f["funding_interval_hours"].null_count() or not (f["funding_interval_hours"]==8).all():
+        print(json.dumps(diagnostic),flush=True)
+        raise ValueError("Funding validation failed; see data/reports/funding_diagnostic.json")
     return f.with_columns(pl.lit("BTCUSDT").alias("symbol")).select("symbol","event_time","funding_rate","mark_price")
 
 def pick(f,model,th):
