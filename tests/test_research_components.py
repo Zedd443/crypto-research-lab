@@ -52,3 +52,23 @@ def test_budget(monkeypatch):
     monkeypatch.setattr(r.psutil,"virtual_memory",lambda:type("M",(),{"available":3*r.GIB})())
     monkeypatch.setattr(r.os,"cpu_count",lambda:4)
     assert budget(4,r.GIB,r.GIB)==2
+
+def test_optuna_resume_budget(tmp_path):
+    from experiment_store import tune
+    def objective(trial):
+        return trial.suggest_float("x",0,1)
+    first=tune(tmp_path,{"fixture":"resume"},objective,2)
+    assert len(first.trials)==2
+    second=tune(tmp_path,{"fixture":"resume"},objective,3)
+    assert len(second.trials)==3
+    third=tune(tmp_path,{"fixture":"resume"},objective,3)
+    assert len(third.trials)==3
+
+def test_ridge_baseline():
+    from baseline_engine import fit_score
+    from feature_engine import BASE_FEATURES
+    f=pl.DataFrame({c:[float(i%17) for i in range(220)] for c in BASE_FEATURES}).with_columns(
+        pl.Series("target_return",[(i%17)*.0001 for i in range(220)]))
+    r=fit_score(f.head(180),f.tail(40),BASE_FEATURES,"ridge",{"alpha":1.},1,42)
+    assert r["loss"]<r["baseline_loss"]
+    assert r["test_rows"]==40
