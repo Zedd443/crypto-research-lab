@@ -23,7 +23,25 @@ def ledger(root):
     t=f["event_time"].to_numpy()
     grid=((t+30000)//(8*3600000))*(8*3600000)
     diagnostic={"actual_events":len(t),"expected_events":len(expected),"missing_grid":np.setdiff1d(expected,grid).tolist(),"unexpected_grid":np.setdiff1d(grid,expected).tolist(),"duplicate_grid":len(grid)-len(np.unique(grid)),"off_grid_events":t[np.abs(t-grid)>60000].tolist(),"missing_mark_times":f.filter(pl.col("mark_price").is_null())["event_time"].to_list(),"null_interval_times":f.filter(pl.col("funding_interval_hours").is_null())["event_time"].to_list(),"non_8h_intervals":f.filter(pl.col("funding_interval_hours")!=8).select("event_time","funding_interval_hours").to_dicts()}
-    from data_engine import write_json
+    # Recover only missing settlement prices from the official funding history.
+    # Do not mutate raw archives or substitute a nearby candle.
+    from data_engine import SESSION, API, write_json
+    recovered=[]
+    for stamp in diagnostic["missing_mark_times"]:
+        response=SESSION.get(API+"/fapi/v1/fundingRate",params={"symbol":"BTCUSDT","startTime":stamp-1000,"endTime":stamp+1000,"limit":10},timeout=30)
+        response.raise_for_status()
+        matches=[x for x in response.json() if int(x["fundingTime"])==stamp and x.get("symbol")=="BTCUSDT"]
+        if len(matches)!=1:raise ValueError("No exact funding event from API: "+str(stamp))
+        x=matches[0]
+        price=float(x["markPrice"])
+        rate=f.filter(pl.col("event_time")==stamp)["funding_rate"].item()
+        if not np.isfinite(price) or price<=0 or not np.isclose(float(x["fundingRate"]),rate,rtol=0,atol=1e-10):raise ValueError("Funding API mismatch: "+str(stamp))
+        recovered.append({"event_time":stamp,"mark_price":price})
+    if recovered:
+        fix=pl.DataFrame(recovered).rename({"mark_price":"recovered_mark"})
+        f=f.join(fix,on="event_time",how="left",validate="1:1").with_columns(pl.coalesce("mark_price","recovered_mark").alias("mark_price")).drop("recovered_mark").sort("event_time")
+    diagnostic["recovered_official_marks"]=recovered
+    diagnostic["remaining_missing_marks"]=f.filter(pl.col("mark_price").is_null())["event_time"].to_list()
     write_json(root/"reports"/"funding_diagnostic.json",diagnostic)
     if len(t)!=len(expected) or np.any(abs(t-expected)>60000) or f["mark_price"].null_count() or f["funding_interval_hours"].null_count() or not (f["funding_interval_hours"]==8).all():
         print(json.dumps(diagnostic),flush=True)
@@ -78,6 +96,6 @@ def main():
     if not results:raise ValueError("No experiments")
     out=root/"reports"/"05_robustness.zip";out.parent.mkdir(parents=True,exist_ok=True)
     tmp=out.with_suffix(".tmp")
-    with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps({"funding_events":fund.height,"note":"Exploratory only; minute-open mark proxy, funding (entry,exit], assumed costs, marginal bootstrap intervals not adjusted for multiple testing, fixed notional not portfolio equity.","experiments":results},allow_nan=False))
+    with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps({"funding_events":fund.height,"note":"Exploratory only; minute-open mark proxy with exact-event official API recovery for missing marks, funding (entry,exit], assumed costs, marginal bootstrap intervals not adjusted for multiple testing, fixed notional not portfolio equity.","experiments":results},allow_nan=False))
     tmp.replace(out);print(out)
 if __name__=="__main__":main()
