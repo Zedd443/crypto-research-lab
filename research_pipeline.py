@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import polars as pl
 import data_engine as de
 import derivatives_engine as aux
-from universe import SYMBOLS
+from universe import SYMBOLS, TRADFI_SYMBOLS, TRADFI_START
 
 S3="https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 
@@ -110,9 +110,9 @@ def run_symbol(task):
             # Skip only months before first and after last known archive when the
             # contract is confirmed delisted; active or unknown status stays open.
             from universe import UNIVERSE
-            if not stamps:raise ValueError("No monthly archive found; inspect symbol manually")
-            first=de.date(stamps[0]+"-01")
-            last=de.date(stamps[-1]+"-01")
+            if not stamps and symbol not in TRADFI_SYMBOLS:raise ValueError("No monthly archive found; inspect symbol manually")
+            first=de.date(TRADFI_START[symbol]) if symbol in TRADFI_SYMBOLS else de.date(stamps[0]+"-01")
+            last=de.date(stamps[-1]+"-01") if stamps else first
             bound_end=(last+timedelta(days=32)).replace(day=1)
             # Include a trailing month for possible final partial daily archive.
             if symbol in UNIVERSE["delisted"]:
@@ -124,6 +124,7 @@ def run_symbol(task):
             de.download(args.root,symbol,start_symbol,end_symbol)
             de.resample(args.root,symbol)
             for kind in args.kinds:
+                if symbol in TRADFI_SYMBOLS and kind=="spot":continue
                 aux.download(args.root,symbol,kind,start_symbol,end_symbol,repair=args.repair)
             audit(args.root,symbol)
         return symbol,None
