@@ -122,15 +122,37 @@ def atomic_write(f,path):
     f.write_parquet(tmp,compression="zstd")
     tmp.replace(path)
 
-def download(root,symbol,start,end):
+def cache_valid(report,path,old,a,b):
+    # Only closed historical partitions; current month always refreshes.
+    if not report.exists() or not path.exists() or not old.height:
+        return False
+    try:
+        m=json.loads(report.read_text())
+        x,y=m["requested"]
+        if not (x<=a and b<=y) or m["rows"]!=old.height:
+            return False
+        if m.get("retrieval_finished") is False:
+            return False
+        # Legacy reports were written only after archive retrieval finished.
+        actual=list(gaps(clean(old,x,y),x,y))
+        return actual==[tuple(v) for v in m["missing_ranges_ms"]]
+    except (ValueError,KeyError,TypeError,OSError):
+        return False
+
+def download(root,symbol,start,end,repair=False):
     for month,nxt in months(start,end):
         a,b=ms(max(start,month)),ms(min(end,nxt))
         path=root/"futures"/symbol/"1m"/(month.strftime("%Y-%m")+".parquet")
         old=pl.read_parquet(path) if path.exists() else parse_rows([])
         f=clean(old,a,b)
         missing=list(gaps(f,a,b))
+        report=root/"metadata"/symbol/(month.strftime("%Y-%m")+".json")
+        historical=nxt<=datetime.now(UTC).replace(day=1,hour=0,minute=0,second=0,microsecond=0)
         if not missing:
             print(symbol,month.date(),"cached",flush=True)
+            continue
+        if historical and not repair and cache_valid(report,path,old,a,b):
+            print(symbol,month.date(),"cached (retrieval; see quality audit)",flush=True)
             continue
         parts=[old]
         full=archive(symbol,"monthly",month.strftime("%Y-%m")) if nxt<=datetime.now(UTC) else None
@@ -151,8 +173,10 @@ def download(root,symbol,start,end):
         remaining=list(gaps(clean(merged,a,b),a,b))
         report=root/"metadata"/symbol/(month.strftime("%Y-%m")+".json")
         report.parent.mkdir(parents=True,exist_ok=True)
-        report.write_text(json.dumps({"symbol":symbol,"requested":[a,b],"rows":merged.height,
-            "missing_ranges_ms":remaining,"note":"Missing ranges may be prelisting, delisted or unavailable; not imputed"},indent=2))
+        tmp=report.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"symbol":symbol,"requested":[a,b],"rows":merged.height,
+            "retrieval_finished":True,"missing_ranges_ms":remaining,"note":"Retrieval finished does not imply complete coverage; no imputation"},indent=2))
+        tmp.replace(report)
         print(symbol,month.date(),merged.height,"missing minutes",sum((y-x)//MINUTE for x,y in remaining),flush=True)
 
 def aggregate(f,tf):
@@ -187,6 +211,7 @@ def main():
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--start",default="2019-09-01")
     p.add_argument("--end",default=None)
+    p.add_argument("--repair",action="store_true")
     a=p.parse_args()
     end=min(date(a.end) if a.end else datetime.now(UTC),datetime.now(UTC))
     end=datetime.fromtimestamp(ms(end)//MINUTE*MINUTE/1000,UTC)
@@ -196,7 +221,7 @@ def main():
     for symbol in a.symbols:
         try:
             if a.command=="download":
-                download(a.root,symbol,date(a.start),end)
+                download(a.root,symbol,date(a.start),end,repair=a.repair)
             else:
                 resample(a.root,symbol)
         except Exception as e:
