@@ -163,9 +163,10 @@ def main():
     # Small single-symbol hourly pilot: imports are already resident at this point.
     # Estimates are incremental headroom, not measured peak training RSS.
     small_pilot=(len(set(a.symbols))==1 and a.tf=="1h" and a.train_days<=180
-                 and a.test_days<=30 and a.threads<=2 and not a.aux)
+                 and a.test_days<=30 and a.threads<=2)
     estimate_mib=({"ridge":512,"logistic":512,"rf":768,"xgb":768}[a.model]
                   if small_pilot else 2048)
+    if small_pilot and a.aux:estimate_mib+=128
     try:
         budget(1,per_worker_bytes=estimate_mib*1024**2,threads_per_worker=a.threads)
     except MemoryError as exc:
