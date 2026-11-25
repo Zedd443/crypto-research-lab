@@ -2,6 +2,9 @@
 Labels are stored separately. All times are UTC milliseconds.
 """
 import argparse
+import os
+import multiprocessing as mp
+os.environ.setdefault('POLARS_MAX_THREADS','1')
 from datetime import timedelta
 import json
 from pathlib import Path
@@ -48,6 +51,8 @@ def labels(f,step,hours):
     if h%step:raise ValueError("Horizon must be a multiple of timeframe")
     n=h//step
     f=f.sort("open_time")
+    if f["open_time"].n_unique()!=f.height or f.filter(pl.col("open_time")%step!=0).height:
+        raise ValueError("Invalid label timestamp grid")
     t=pl.col("open_time")
     # Signal at bar close; enter one bar later, exit n bars after entry.
     return f.select((pl.col("close_time")+1).alias("decision_time"),
@@ -134,12 +139,27 @@ def build(root,symbol,tf,force=False):
                               "assumptions":"Auxiliary publication lags assumed conservatively, not verified historical publication timestamps. No future fill."})
         print(symbol,tf,p.stem,left.height,"features",flush=True)
 
+def build_task(task):
+    build(*task)
+    return task[1]
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--tf",choices=list(STEPS),default="1h")
     p.add_argument("--force",action="store_true")
+    p.add_argument("--workers",type=int,choices=range(1,9),default=2)
     a=p.parse_args()
-    for s in dict.fromkeys(a.symbols):build(a.root,s,a.tf,a.force)
-if __name__=="__main__":main()
+    from resource_policy import budget
+    tasks=[(a.root,s,a.tf,a.force) for s in dict.fromkeys(a.symbols)]
+    workers=min(len(tasks),budget(a.workers,per_worker_bytes=1024**3))
+    print("Feature workers:",workers,flush=True)
+    if workers==1:
+        for task in tasks:build_task(task)
+    else:
+        with mp.get_context("spawn").Pool(workers) as pool:
+            for symbol in pool.imap_unordered(build_task,tasks,chunksize=1):print(symbol,"DONE",flush=True)
+if __name__=="__main__":
+    mp.freeze_support()
+    main()
