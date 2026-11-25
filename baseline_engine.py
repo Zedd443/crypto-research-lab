@@ -21,11 +21,11 @@ from experiment_store import checkpoint, identity, tune, report_fold
 from resource_policy import budget
 from universe import SYMBOLS
 
-def files(root,symbols,tf,h):
+def files(root,symbols,tf,h,delay=60):
     pairs=[]
     for s in symbols:
         for p in sorted((root/"features"/s/tf).glob("*.parquet")):
-            q=root/"labels"/s/tf/str(h)/p.name
+            q=root/("labels" if delay==60 else "labels_delay_"+str(delay))/s/tf/str(h)/p.name
             if q.exists():pairs.append((p,q))
     if not pairs:raise ValueError("Build features and labels first")
     return pairs
@@ -140,18 +140,20 @@ def main():
     p.add_argument("--test-days",type=int,default=30)
     p.add_argument("--model",choices=["ridge","logistic","rf","xgb"],default="ridge")
     p.add_argument("--aux",action="store_true")
+    p.add_argument("--delay-minutes",type=int,choices=[15,60],default=60)
     p.add_argument("--export-predictions",action="store_true")
     p.add_argument("--trials",type=int,default=0)
     p.add_argument("--threads",type=int,default=2,choices=[1,2,4])
     p.add_argument("--seed",type=int,default=42)
     a=p.parse_args()
+    if a.delay_minutes!=60 and (a.tf!="1h" or set(a.symbols)!={"BTCUSDT"}):p.error("15m delay pilot supports BTC hourly only")
     if a.trials and a.export_predictions:p.error("Export is for fixed configurations only")
     if a.trials<0:p.error("Negative trial count")
     if a.horizon*3600000%STEPS[a.tf]:p.error("Horizon must be a multiple of timeframe")
     start,hs,he=map(lambda v:de.ms(de.date(v)),(a.start,a.holdout_start,a.holdout_end))
     folds=make_folds(start,hs,a.train_days,a.test_days)
     if not folds:p.error("No development folds")
-    pairs=files(a.root,list(dict.fromkeys(a.symbols)),a.tf,a.horizon)
+    pairs=files(a.root,list(dict.fromkeys(a.symbols)),a.tf,a.horizon,a.delay_minutes)
     # Exclude partitions strictly after the development period from identity as well.
     pairs=[(x,y) for x,y in pairs if de.ms(de.date(x.stem+"-01"))<hs]
     if not pairs:p.error("No development data")
@@ -177,7 +179,7 @@ def main():
     print(f"Resource preflight: {a.model}, estimated additional headroom {estimate_mib} MiB + 1024 MiB reserve",flush=True)
     spec={"manifest_id":protocol["manifest_id"],"code":code,"sklearn":sklearn.__version__,
           "polars":pl.__version__,"model":a.model,"features":cols,"tf":a.tf,"horizon":a.horizon,
-          "seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
+          "delay_minutes":a.delay_minutes,"seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
     if a.export_predictions:spec["prediction_export"]=1
     if a.model=="xgb":
         import xgboost
