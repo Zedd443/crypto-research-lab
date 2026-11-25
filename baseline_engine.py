@@ -44,7 +44,7 @@ def load_fold(pairs,cols,fold):
         # Predicate pushdown; no holdout rows enter any development fold.
         cond=pl.col("decision_time").is_between(fold.train_start,fold.test_end,closed="left")
         x=pl.scan_parquet(p).filter(cond).select("symbol","decision_time",*cols)
-        y=pl.scan_parquet(q).filter(cond & (pl.col("label_end")<fold.test_end)).select("symbol","decision_time","label_end","target_return")
+        y=pl.scan_parquet(q).filter(cond & (pl.col("label_end")<fold.test_end)).select("symbol","decision_time","label_end","target_return","entry_time","entry_price","exit_price")
         f=x.join(y,on=["symbol","decision_time"],how="inner",validate="1:1").collect()
         if f.height:frames.append(f)
     if not frames:raise ValueError("Empty fold")
@@ -55,7 +55,15 @@ def load_fold(pairs,cols,fold):
     if train.height<100 or test.height<30:raise ValueError("Insufficient valid fold rows")
     return train,test
 
-def fit_score(train,test,cols,model,params,threads,seed):
+def fit_score(train,test,cols,model,params,threads,seed,prediction_path=None):
+    def export(pred,base):
+        if prediction_path is None:return
+        if not np.isfinite(pred).all():raise ValueError("Nonfinite predictions")
+        frame=test.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price","target_return").with_columns(pl.Series("prediction",pred),pl.Series("baseline_prediction",base))
+        prediction_path.parent.mkdir(parents=True,exist_ok=True)
+        temp=prediction_path.with_suffix(".tmp")
+        frame.write_parquet(temp)
+        temp.replace(prediction_path)
     # XGBoost early stopping uses only an internal, purged chronological slice.
     fit=train
     inner=None
@@ -81,6 +89,7 @@ def fit_score(train,test,cols,model,params,threads,seed):
             pred=estimator.predict_proba(Xt)[:,1]
             target=(yt>0).astype(int)
             base=np.full(len(yt),binary.mean())
+            export(pred,base)
             loss=brier_score_loss(target,pred)
             return {"score":-float(loss),"loss":float(loss),"baseline_loss":float(brier_score_loss(target,base)),
                     "direction_accuracy":float(((pred>=.5)==target).mean()),
@@ -99,6 +108,7 @@ def fit_score(train,test,cols,model,params,threads,seed):
             estimator.fit(X,y,eval_set=[(Xi,yi)],verbose=False)
         else:raise ValueError("Unknown model")
         pred=estimator.predict(Xt)
+    export(pred,np.zeros_like(yt))
     loss=mean_squared_error(yt,pred)
     return {"score":-float(loss),"loss":float(loss),"baseline_loss":float(mean_squared_error(yt,np.zeros_like(yt))),
             "mae":float(mean_absolute_error(yt,pred)),
@@ -130,10 +140,12 @@ def main():
     p.add_argument("--test-days",type=int,default=30)
     p.add_argument("--model",choices=["ridge","logistic","rf","xgb"],default="ridge")
     p.add_argument("--aux",action="store_true")
+    p.add_argument("--export-predictions",action="store_true")
     p.add_argument("--trials",type=int,default=0)
     p.add_argument("--threads",type=int,default=2,choices=[1,2,4])
     p.add_argument("--seed",type=int,default=42)
     a=p.parse_args()
+    if a.trials and a.export_predictions:p.error("Export is for fixed configurations only")
     if a.trials<0:p.error("Negative trial count")
     if a.horizon*3600000%STEPS[a.tf]:p.error("Horizon must be a multiple of timeframe")
     start,hs,he=map(lambda v:de.ms(de.date(v)),(a.start,a.holdout_start,a.holdout_end))
@@ -165,6 +177,7 @@ def main():
     spec={"manifest_id":protocol["manifest_id"],"code":code,"sklearn":sklearn.__version__,
           "polars":pl.__version__,"model":a.model,"features":cols,"tf":a.tf,"horizon":a.horizon,
           "seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
+    if a.export_predictions:spec["prediction_export"]=1
     if a.model=="xgb":
         import xgboost
         spec["xgboost"]=xgboost.__version__
@@ -175,10 +188,14 @@ def main():
         scores=[]
         for fold in folds:
             fspec={**spec,"params":params}
+            prediction_path=out/"predictions"/(str(fold.fold_id)+".parquet") if a.export_predictions else None
             def compute():
                 train,test=load_fold(pairs,cols,fold)
-                return fit_score(train,test,cols,a.model,params,a.threads,a.seed)
+                return fit_score(train,test,cols,a.model,params,a.threads,a.seed,prediction_path)
             result=checkpoint(out/"folds",fspec,fold.fold_id,compute)
+            if prediction_path is not None and not prediction_path.exists():
+                # Recover missing output without trusting a metrics-only checkpoint.
+                compute()
             scores.append(result["score"])
             print(a.model,"fold",fold.fold_id,"score",result["score"],flush=True)
             if trial is not None:report_fold(trial,fold.fold_id,float(np.mean(scores)))
