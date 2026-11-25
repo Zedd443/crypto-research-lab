@@ -59,3 +59,26 @@ No nested four-by-four parallelism; no multi-process SQLite optimization; no mid
 - Prior uploaded empirical literature and research decisions remain evidence inputs; benchmark all candidates on actual Binance data.
 
 Local data completeness and CI status must be verified separately from code commits.
+
+## Validation bundles and BTC pilot
+Run after the download stops; review each ZIP before the next gate. Reports are diagnostic, not a certificate of data quality. Existing raw partitions are not changed.
+```cmd
+python research_pipeline.py audit --workers 4
+python research_pipeline.py compare --symbols BTCUSDT --start 2024-01-01 --end 2024-02-01
+python report_engine.py data
+python news_engine.py fng
+python benchmark_engine.py --partitions 24 --workers 1 2 4 --repeats 3
+python feature_engine.py --symbols BTCUSDT --tf 1h --workers 1
+python report_engine.py features --start 2021-01-01 --end 2025-01-01
+```
+Pilot development (holdout reserved, not certified unseen):
+```cmd
+for %M in (ridge logistic rf xgb) do python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model %M
+python report_engine.py baseline
+```
+After review only, example tuning run (20 total trials, not 20 additional on resume):
+```cmd
+python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model ridge --trials 20
+python report_engine.py optimization
+```
+Bundles under data/reports: 01_data_quality.zip, 02_feature_label.zip, 03_predictive_benchmark.zip, 04_optimization.zip. Benchmark separately data/metadata/compute_benchmark.json. Feature report covers development only; experiment bundles include all matching completed experiments, not an isolated run. No full backtest/holdout command yet. No verified listing/calendar, OOS prediction export, full ablation, or portfolio report yet.
