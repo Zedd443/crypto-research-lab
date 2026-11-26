@@ -356,3 +356,12 @@ git pull origin main
 python prosp_readiness_engine.py
 ```
 Upload data/reports/29_prosp_readiness.zip.
+
+## Checkpoint — ProSP readiness PASS, partial spot coverage
+Source 29_prosp_readiness.zip: ten assets each 8766/4383 complete futures bars at 4h/8h; nine assets have identical five/two missing spot endpoints, leaving conservative 7676/4063 complete-history periods each. ATOM has zero spot partitions, hence ten-asset Set3 coverage zero. Set1 readiness 8753/4370 periods. These are feature coverage counts, not OOS rows. Next prosp_original_features_engine.py (01e9cb9): six bounded runs, 4h/8h each with Set1 ten assets, Set1 nine and Set3 nine matched on spot-ready common sample. Paper equations 1–5 and Table 3, lagged returns/turnover, normalized cross-sectional returns; quote volume proxy for turnover, ordinary sample variance of price times base volume as interpretation of ambiguous Eq6, no synthetic spot. Two tails each, same pooled logistic C/seed and purged folds, delayed open-to-open labels, fee/slippage-only 0/1/6/15 bps per side, no tuning or holdout. Not exact replication; runtime pending. ATOM remains in universe, no spot recovery now. If no promising edge, eliminate tested feature adaptation from tuning and proceed P1DR 24h.
+
+```cmd
+git pull origin main
+python prosp_original_features_engine.py
+```
+Upload data/reports/30_prosp_features.zip.
