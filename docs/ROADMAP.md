@@ -308,3 +308,12 @@ git pull origin main
 python multi_asset_readiness_engine.py
 ```
 Upload data/reports/24_multi_asset_readiness.zip.
+
+## Checkpoint — multi-asset preliminary readiness
+Source 24_multi_asset_readiness.zip: 10/30 pass full-window raw-minute and partition-presence gate (BTC, ETH, BNB, DOGE, ADA, LINK, AVAX, BCH, UNI, ATOM), each 2,103,840 raw minutes, zero internal gaps/invalid rows, 48 funding and mark partitions. Nine symbols have exactly 7,200 missing minutes (SOL, XRP, TRX, LTC, NEAR, HBAR, WAVES, XEM, OMG); investigate common missing dates later. XRP/DOT/SUI end at October 2023 despite expected later availability; AAVE/FIL absent in development; other partial coverage includes listing effects. Do not infer listing/delisting from cache alone. Next multi_asset_transfer_engine.py (1d7ec80): sequential independent per-symbol retraining of frozen BTC specification on nine passing alternatives (not zero-shot transfer), technical-only hourly features built from raw minute master, exact 15m delayed open entry and 4h open exit, same 42 folds, original C/seed and .70 threshold. Cached datasets and fold predictions, no holdout/tuning/download. Report predictive skill and explicitly preliminary fee/slippage-only diagnostics; funding not assumed zero for economic conclusions. BTC cached predictions are fee/slippage-only control. Funding schedules, settlement marks and listing history must be verified before net profitability claims. Full-window survivor selection bias remains, not a cross-sectional portfolio. Runtime pending.
+
+```cmd
+git pull origin main
+python multi_asset_transfer_engine.py
+```
+Upload data/reports/25_multi_asset_transfer.zip.
