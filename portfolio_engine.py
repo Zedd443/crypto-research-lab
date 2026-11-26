@@ -17,6 +17,31 @@ MIN=60000
 def require(ok,msg):
     if not ok:raise ValueError(msg)
 
+def mark_window(e,z):
+    months={datetime.fromtimestamp(t/1000,timezone.utc).strftime("%Y-%m") for t in (e,z-1)}
+    paths=[ROOT/"mark"/"BTCUSDT"/(m+".parquet") for m in sorted(months)]
+    if not all(p.exists() for p in paths):
+        return None,[str(p) for p in paths if not p.exists()]
+    return pl.scan_parquet(paths).filter(pl.col("event_time").is_between(e,z,closed="left")).select("event_time","open").collect().sort("event_time"),[]
+
+def mark_audit(trades):
+    issues=[]; expected_total=0; valid_total=0
+    for t in trades.iter_rows(named=True):
+        e=int(t["entry_time"]);z=int(t["label_end"])
+        expected=np.arange(e,z,MIN); expected_total+=len(expected)
+        x,absent=mark_window(e,z)
+        ts=x["event_time"].to_numpy() if x is not None else np.array([],dtype=np.int64)
+        px=x["open"].cast(pl.Float64).to_numpy() if x is not None else np.array([])
+        missing=np.setdiff1d(expected,ts)
+        extra=np.setdiff1d(ts,expected)
+        unique,counts=np.unique(ts,return_counts=True)
+        duplicate=unique[counts>1]
+        invalid=ts[~(np.isfinite(px)&(px>0))]
+        valid_total+=len(np.setdiff1d(np.intersect1d(expected,ts),np.union1d(duplicate,invalid)))
+        if absent or len(missing) or len(extra) or len(duplicate) or len(invalid):
+            issues.append({"entry_time":e,"label_end":z,"side":int(t["side"]),"missing_files":absent,"missing_minutes":missing.tolist(),"off_grid":extra.tolist(),"duplicates":duplicate.tolist(),"invalid_prices":invalid.tolist()})
+    return {"trades":trades.height,"expected_minutes":expected_total,"valid_minutes":valid_total,"affected_trades":len(issues),"issues":issues}
+
 def replay(trades,marks,fraction,first,last,fee):
     equity=1.; peak=1.; dd=0.; equity_daily={}; curve=[]; records=[]
     for t in trades.iter_rows(named=True):
@@ -64,6 +89,8 @@ def audit(out):
     t=pick(f,"logistic",.7)
     require(not np.any(np.searchsorted(missing,t["label_end"].to_numpy(),side="right")>np.searchsorted(missing,t["entry_time"].to_numpy(),side="right")),"Unknown funding in incumbent; do not silently exclude")
     out.update({"experiment":folder.name,"first":first,"last":last,"prediction_hashes":{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},"cash_benchmark_return":0.,"scenarios":[]})
+    out["mark_coverage"]=mark_audit(t)
+    require(out["mark_coverage"]["affected_trades"]==0,"Intratrade mark coverage failed; see mark_coverage in report")
     for fee,slip in [(5,1),(5,3),(10,5)]:
         scored=score_trades(t,fee,slip,fund,{"BTCUSDT":[(A,B)]})
         require(scored.height==104,"Incumbent trade count mismatch")
