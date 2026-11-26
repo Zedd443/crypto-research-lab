@@ -150,3 +150,16 @@ git pull origin main
 python feature_causality_engine.py
 ```
 Upload data/reports/09_feature_causality.zip even if fail.
+
+## Checkpoint — feature causality PASS
+Source: 09_feature_causality.zip; 48 monthly audits passed, cached technical and auxiliary replay and sampled prefix checks matched. Additional assumed lag scenarios 0/5/15/60 minutes evaluated for coverage/value changes only. Historical publication times and economic lag sensitivity remain unverified.
+
+Next: bounded-state imputation (21949d6), same reduced derivatives full eligibility, carry only observed OI, OI value and global long-short ratio for at most one decision hour; no recursive carry; original training-selected missing indicators retained; residual missing values use fold median. This is a hybrid sensitivity experiment, not recovery of missing observations; actual source age can exceed one hour by the original observation lag. No holdout or tuning. Local tests and runtime pending. Economic lag sensitivity remains separate.
+
+```cmd
+git pull origin main
+python -m pytest -q
+python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model logistic --delay-minutes 15 --aux --drop-features body count_toptrader_long_short_ratio sum_toptrader_long_short_ratio sum_taker_long_short_vol_ratio --imputation bounded-state --export-predictions
+python robustness_engine.py
+```
+Upload data/reports/05_robustness.zip. Preserve prior experiments.
