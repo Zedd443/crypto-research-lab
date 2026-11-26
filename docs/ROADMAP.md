@@ -78,7 +78,7 @@ Source: user-provided local validation bundles; raw Parquet files and historical
 | 15m retraining | Logistic 4h technical candidate at symmetric 0.70 confidence: 104 trades, net expectancy 0.53817%, PF 2.07294, fixed-notional P&L 55.9697%, realized fixed-notional drawdown 9.3569% |
 | Ablation | 12 single-feature removals completed. Without body: 104 trades, expectancy 0.55119%, PF 2.32961, fixed-notional P&L 57.3242%. Without relative_volume_20: 95 trades, expectancy 0.58737%, P&L 55.8003%. Removal of ret_1 reproduced baseline reported metrics exactly; inspect redundancy and prediction identity. |
 | Missingness audit | 35,064/35,064 hourly rows; 35,063 complete core rows; 27,066 complete all-feature rows. Top trader ratios ~22% missing, taker ratio ~9%; extended contiguous outages. |
-| Current stage | Reduced derivatives test not yet reported; then controlled missingness and integrity audit before further tuning |
+| Current stage | Reduced derivatives completed: 449 trades, expectancy -0.0142576%, PF 0.975505, fixed-notional P&L -6.40168%; both nominal bootstrap intervals cross zero. Technical without body remains exploratory lead. |
 
 Primary cost: 5 bps fee + 1 bp slippage per side, plus funding; funding schedule 4,383 events, 24 missing settlement marks; impacted trades excluded after original selection. Mark minute-open is a proxy. Fixed-notional P&L is NOT compounded portfolio return. Drawdown excludes intratrade floating losses. Bootstrap intervals use 7/30-day calendar blocks, 10,000 replicates; no multiple-testing adjustment yet. The candidate was selected from reused development data. Holdout 2025 reserved, not certified unseen due to prior research exposure. No production readiness claim.
 
@@ -108,3 +108,12 @@ Send data/reports/05_robustness.zip. This is a 20-feature comparison using exist
 ## Paper-based research handover
 
 Review full uploaded papers and exact methods before implementing any new experiment. Maintain a paper registry with DOI, market/exchange, sample period, frequency, features, target, validation, execution/cost assumptions, findings, limitations, replication plan and accept/drop decision. Distinguish original findings from adaptations. Earlier reading includes Lin et al. parameter plateau, Jaquart et al. forecasting/trading, Arain & Snudden conditional directional accuracy, Zhang et al. ProSP, Deprez & Frommel technical rules, Cakici et al. cross-sectional ML, Easley et al. microstructure, Albers et al. latency, and crypto pairs/cascade papers. The exact accepted paper inventory must be reconciled with the uploaded full texts; do not assume the list is exhaustive or that papers demonstrate a current Binance futures edge.
+
+## Next checkpoint — controlled common complete-case
+Reduced derivatives experiment 2c393ded: 454 original trades, 5 excluded for unknown funding. Compare technical without body and reduced derivatives on identical finite reduced-feature eligibility in each chronological fold. Existing full-coverage reports remain comparators; complete-case selection changes operational coverage and does not isolate imputation alone. No holdout or tuning. New baseline source digest creates new identities; retain previous checkpoints. Implementation commit 057c370; local pytest and runtime acceptance pending.
+
+```cmd
+python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model logistic --delay-minutes 15 --drop-features body --missing-policy common-complete --export-predictions
+python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model logistic --delay-minutes 15 --aux --drop-features body count_toptrader_long_short_ratio sum_toptrader_long_short_ratio sum_taker_long_short_vol_ratio --missing-policy common-complete --export-predictions
+python robustness_engine.py
+```
