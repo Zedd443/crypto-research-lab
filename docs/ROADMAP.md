@@ -224,3 +224,6 @@ git pull origin main
 python channel_portfolio_engine.py
 ```
 Upload data/reports/15_channel_portfolio.zip regardless of status. After portfolio accounting, park or retain challenger and proceed to Feature V2 rather than tune immediately.
+
+## Checkpoint — Channel100 portfolio PASS
+15_channel_portfolio(3).zip: 1,807,020/1,807,020 active mark minutes valid, zero gaps. Recovery commits 73d36c1,52e15fb,421768b. Primary 5/1 bps, fractions .25/.5/1: compounded returns 46.29554/98.76225/202.73316%, MTM DD 12.76383/23.83470/41.97567%, Sharpe .88217/.88443/.88330. Stress 10/5: returns 38.12796/77.23118/140.76425%, DD 13.54397/25.19785/44.05701%, Sharpe .75556/.75578/.75135. Exposure 99.59325% on manifest calendar. All scenarios pass; no liquidation model or intraminute extremes. Logistic retains incumbent status on risk-adjusted performance; retain Channel100 as exploratory non-ML challenger, no tuning. Close technical V1, open Feature V2 with literature-based hypotheses and bounded resource usage. No holdout.
