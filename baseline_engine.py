@@ -43,7 +43,7 @@ def load_fold(pairs,cols,fold):
     for p,q in pairs:
         # Predicate pushdown; no holdout rows enter any development fold.
         cond=pl.col("decision_time").is_between(fold.train_start,fold.test_end,closed="left")
-        x=pl.scan_parquet(p).filter(cond).select("symbol","decision_time",*cols)
+        x=pl.scan_parquet(p).filter(cond).select("symbol","decision_time",*list(dict.fromkeys([*BASE_FEATURES,*cols])))
         y=pl.scan_parquet(q).filter(cond & (pl.col("label_end")<fold.test_end)).select("symbol","decision_time","label_end","target_return","entry_time","entry_price","exit_price")
         f=x.join(y,on=["symbol","decision_time"],how="inner",validate="1:1").collect()
         if f.height:frames.append(f)
@@ -140,6 +140,7 @@ def main():
     p.add_argument("--test-days",type=int,default=30)
     p.add_argument("--model",choices=["ridge","logistic","rf","xgb"],default="ridge")
     p.add_argument("--aux",action="store_true")
+    p.add_argument("--drop-features",nargs="+",default=[])
     p.add_argument("--delay-minutes",type=int,choices=[15,60],default=60)
     p.add_argument("--export-predictions",action="store_true")
     p.add_argument("--trials",type=int,default=0)
@@ -160,7 +161,10 @@ def main():
     source=digest([f for pair in pairs for f in pair])
     protocol=manifest(folds,hs,he,source)
     code=digest([Path(__file__),Path(__file__).with_name("feature_engine.py"),Path(__file__).with_name("validation_protocol.py")])
-    cols=FEATURES if a.aux else BASE_FEATURES
+    cols=list(FEATURES if a.aux else BASE_FEATURES)
+    if set(a.drop_features)-set(cols):p.error("Unknown or inactive feature in --drop-features")
+    cols=[c for c in cols if c not in a.drop_features]
+    if not cols:p.error("Cannot drop every feature")
     # One coordinator, bounded internal threads. No concurrent copies of fold matrices.
     # Small single-symbol hourly pilot: imports are already resident at this point.
     # Estimates are incremental headroom, not measured peak training RSS.
