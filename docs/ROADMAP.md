@@ -236,3 +236,12 @@ git pull origin main
 python feature_v2_engine.py
 ```
 Upload data/reports/16_feature_v2.zip regardless of status.
+
+## Checkpoint — normalized derivatives V2 PASS, park
+Source 16_feature_v2.zip, experiment 151050258aa17feb380dc6ef7cc0b66bbe214b851f5c1d1abca788f4113a528f. Common eligibility verified. 35,064 feature rows; missing counts 113/172/168/355/540 for five features respectively. Challenger 268 trades, expectancy +0.061419%, PF 1.109586, fixed-notional P&L +16.460328%, DD 43.214029%, stress P&L -31.811874%, DA 52.3461%, Brier .25537998 vs incumbent .25019464 and naive .24994112. Nominal 7d and 30d CI cross zero; incumbent unchanged. Park normalized derivatives V2 (not all possible derivatives hypotheses). Next market_regime_engine.py (b69cf57): 24h/168h realized hourly volatility ratio, signed directional efficiency (sum log returns / sum absolute log returns) at 24h/168h, close location in trailing high-low range 24h/168h. Fixed windows, causal completed hourly bars, gap-aware segments, same incumbent features/folds/threshold, no tuning. Overlap with existing trend features possible; test incremental contribution. Separate identity-keyed cache, no holdout. Exploratory engineering adaptation, not exact paper replication; full-text literature mapping pending. Runtime pending.
+
+```cmd
+git pull origin main
+python market_regime_engine.py
+```
+Upload data/reports/17_market_regime.zip.
