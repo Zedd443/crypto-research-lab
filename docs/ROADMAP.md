@@ -326,3 +326,12 @@ git pull origin main
 python multi_asset_funding_engine.py
 ```
 Upload data/reports/26_multi_asset_funding.zip regardless of status.
+
+## Checkpoint — multi-asset funding PASS; close independent screening
+Source 26_multi_asset_funding.zip: all five pass standard 8h grid, 4383 events each, no missing/duplicate/off-grid settlements. Missing minute-open marks BNB/ETH/ATOM/AVAX/UNI = 24/6/6/24/21; none intersect selected trades. Primary net expectancy (%) .623735/.376365/.261886/.199131/.127296; PF 1.563867/1.461428/1.193856/1.128860/1.105862; fixed-notional P&L (%) 62.99719/29.35650/26.71241/15.53218/10.05640; DD (%) 30.88060/18.61210/36.44311/46.24050/49.01200. Stress P&L (%) 44.72853/15.28773/8.37701/1.44345/-4.23718. All nominal bootstrap intervals cross zero. BTC remains incumbent, BNB/ETH exploratory only, park ATOM/AVAX/UNI. No additional funding repair required for these selected trades, but coverage not sufficient for arbitrary new trades. Next cross_sectional_engine.py (4fbdd85): fixed balanced ten-asset survivor panel from cached independent logistic OOS probabilities; Spearman IC on hourly common eligibility, fixed UTC 4h schedule, equal-weight top/bottom two (gross notional one), compare 24h momentum/reversal controls. No tuning/retraining, no holdout. Fee/slippage-only preliminary basket economics, funding must be audited separately for any viable candidate. Ranking probabilities trained independently are not expected-return forecasts and may not be comparable across assets. Universe selection bias and ex-post balanced coverage limit inference. Exploratory adaptation, not ProSP replication; full-text literature mapping still pending. Runtime pending.
+
+```cmd
+git pull origin main
+python cross_sectional_engine.py
+``
+Upload data/reports/27_cross_sectional.zip.
