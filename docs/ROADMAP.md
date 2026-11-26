@@ -254,3 +254,12 @@ git pull origin main
 python liquidity_engine.py
 ```
 Upload data/reports/18_liquidity.zip.
+
+## Checkpoint — liquidity V2 PASS, park
+Source 18_liquidity.zip, experiment db2321fc13f6ec7039b34fe8861d4df8464c4ba133129e3b55cf153ef968d2e0. 35,064 rows; missing 336/167/167/3/23. DA 52.2630%, Brier .250589237 vs incumbent .250194639 and naive .249941121. Primary: 144 trades, expectancy +.2223266%, PF 1.480846, fixed-notional P&L +32.015026%, DD 7.208729%, WR 47.9167%; stressed P&L +6.043164%, PF 1.074851, DD 12.441763%. All nominal bootstrap intervals cross zero. Park liquidity V2, retain market regime as secondary candidate. Next market_structure_engine.py (e721515): five fixed additions, log close distance from prior 20/100 hourly highs and lows, log channel width ratio 20/100. Exclude current candle from channel bounds, gap-aware segments; same incumbent folds, eligibility, label, delay, threshold and costs. Inspired by earlier channel breakout evidence, not exact paper replication; literature mapping remains pending. No tuning or holdout; runtime pending. Next multi-timeframe features.
+
+```cmd
+git pull origin main
+python market_structure_engine.py
+```
+Upload data/reports/19_market_structure.zip.
