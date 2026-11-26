@@ -117,3 +117,25 @@ python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-
 python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model logistic --delay-minutes 15 --aux --drop-features body count_toptrader_long_short_ratio sum_toptrader_long_short_ratio sum_taker_long_short_vol_ratio --missing-policy common-complete --export-predictions
 python robustness_engine.py
 ```
+
+## Checkpoint — common complete-case results and integrity gate
+
+Source: user-uploaded 05_robustness(1).zip, 40 experiment entries. Primary cost and threshold unchanged (0.70, fee 5 bps + slippage 1 bp per side, funding).
+
+| Candidate | ID prefix | Trades | Expectancy % | PF | Fixed-notional P&L % | Realized DD % |
+|---|---|---:|---:|---:|---:|---:|
+| Technical without body | 6823506d | 104 | 0.55119 | 2.32961 | 57.3242 | 6.2794 |
+| Reduced derivatives median | 2c393ded | 449 | -0.01426 | 0.97550 | -6.4017 | 36.9020 |
+| Technical common complete | bd5df1b4 | 103 | 0.38526 | 1.71359 | 39.6817 | 9.0585 |
+| Reduced derivatives common complete | e943ad3f | 387 | -0.03060 | 0.94637 | -11.8420 | 39.0314 |
+
+Both technical variants have positive nominal 7/30-day bootstrap lower bounds; both derivatives variants cross zero. Common eligibility does not isolate imputation alone; no conclusion that all derivatives features lack value. Defer further imputation variants until integrity checks and publication-lag/feature-representation audit. No tuning or holdout. Technical remains exploratory lead. Common-complete runtime produced reports; pytest status not supplied.
+
+Next: integrity_engine.py (commit 727e052), read-only with respect to raw data and experiments, sequential monthly raw checks and fold checks, no retraining. Checks current data digest, manifest and checkpoint identities, exact prediction/label keys, raw minute continuity and entry/exit prices, Brier and naive baseline, common train/test masks and economic recomputation. It does not independently prove feature causality, historical publication times, model replay or execution realism; funding ledger helper writes diagnostic report. Local runtime acceptance pending.
+
+```cmd
+git pull origin main
+python -m pytest -q
+python integrity_engine.py
+```
+Upload data/reports/08_integrity.zip even on audit failure. Preserve all prior checkpoints. Do not rerun completed robustness screening merely to update code hashes.
