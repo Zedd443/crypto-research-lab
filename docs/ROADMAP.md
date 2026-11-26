@@ -299,3 +299,12 @@ git pull origin main
 python excursion_engine.py
 ```
 Upload data/reports/23_excursions.zip.
+
+## Checkpoint — excursion diagnostics PASS; close initial target branch
+Source 23_excursions.zip, source hash 6c9a9ea5a212657ce3211ccee31f1ec443bc519c836e907d18945dd9c6836b13. Frozen 104 incumbent /63 cost-aware trades, median gross MAE .94651/1.00477%, MFE 1.38283/1.48099%, giveback 1.00179/1.03372%. Winners median MAE .64753/.74227%, MFE 2.25694/2.35001%, time to MFE 156.5/143.5 minutes; losers time to MFE 39/29 minutes. 56 overlapping decision timestamps, not proof of same side or independent diversification. No ex-post TP/SL selection. Retain fixed 4h candidates. Next multi_asset_readiness_engine.py (78edf83): sequential monthly raw-minute audit on 30 crypto symbols, development only, full-window conservative readiness criteria and funding/mark partition presence. No synthetic bars, downloads, model fits or holdout. Existing present-day universe is selection-biased; full-window gate excludes later listings and is only for transfer pilot, not cross-sectional universe construction. Listing dates, actual funding completeness and mark coverage still require verification before economic evaluation. Runtime pending. Next test frozen BTC specification on eligible independent symbols, with appropriate label/feature generation and funding audits; cross-sectional ranking separately after literature review.
+
+```cmd
+git pull origin main
+python multi_asset_readiness_engine.py
+```
+Upload data/reports/24_multi_asset_readiness.zip.
