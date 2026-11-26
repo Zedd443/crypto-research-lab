@@ -170,6 +170,7 @@ def main():
     p.add_argument("--test-days",type=int,default=30)
     p.add_argument("--model",choices=["ridge","logistic","rf","xgb"],default="ridge")
     p.add_argument("--aux",action="store_true")
+    p.add_argument("--aux-extra-lag",type=int,choices=[0,5,15,60],default=0)
     p.add_argument("--imputation",choices=["median","bounded-state"],default="median")
     p.add_argument("--missing-policy",choices=["median","common-complete"],default="median")
     p.add_argument("--drop-features",nargs="+",default=[])
@@ -191,6 +192,11 @@ def main():
     # Exclude partitions strictly after the development period from identity as well.
     pairs=[(x,y) for x,y in pairs if de.ms(de.date(x.stem+"-01"))<hs]
     if not pairs:p.error("No development data")
+    if a.aux_extra_lag:
+        if not (a.aux and a.model=="logistic" and a.tf=="1h" and set(a.symbols)=={"BTCUSDT"} and a.delay_minutes==15 and a.horizon==4 and a.imputation=="median" and a.missing_policy=="median" and not a.trials and a.start=="2021-01-01" and a.holdout_start=="2025-01-01"):
+            p.error("Lag pilot requires fixed BTC development logistic configuration")
+        pairs=[(a.root/"lag_features"/str(a.aux_extra_lag)/"BTCUSDT"/"1h"/x.name,y) for x,y in pairs]
+        if len(pairs)!=48 or not all(x.exists() for x,y in pairs):p.error("Generate all lag partitions first")
     source=digest([f for pair in pairs for f in pair])
     protocol=manifest(folds,hs,he,source)
     code=digest([Path(__file__),Path(__file__).with_name("feature_engine.py"),Path(__file__).with_name("validation_protocol.py")])
@@ -219,6 +225,7 @@ def main():
           "delay_minutes":a.delay_minutes,"seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
     if a.missing_policy!="median":spec["missing_policy"]=a.missing_policy
     if a.imputation!="median":spec["imputation"]=a.imputation
+    if a.aux_extra_lag:spec["aux_extra_lag"]=a.aux_extra_lag
     if a.export_predictions:spec["prediction_export"]=1
     if a.model=="xgb":
         import xgboost
