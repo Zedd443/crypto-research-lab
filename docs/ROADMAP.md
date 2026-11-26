@@ -272,3 +272,12 @@ git pull origin main
 python multi_timeframe_engine.py
 ```
 Upload data/reports/20_multi_timeframe.zip.
+
+## Checkpoint — multi-timeframe V2 PASS, close initial Feature V2
+Source 20_multi_timeframe.zip, experiment 1ce4dd71966e1f695082d062572f53d9c13fe2da5c1819791215beaf26593ae1. 35,064 rows, missing 27/79/83/191/479/503; DA 52.110006%, Brier .250852772 vs naive .249941121. Primary 171 trades, expectancy +.149939%, PF 1.254956, P&L +25.639561%, DD 15.465544%; stress P&L -5.169351%, PF .955528, DD 22.440898%. All nominal bootstrap intervals cross zero. Park multi-timeframe. No V2 group beat incumbent; retain regime as secondary candidate only. Next cost_aware_target_engine.py (8d35da1): fixed three-class logistic, labels short/flat/long determined by positive realized hypothetical net return at 5/1 bps plus recovered funding; flat if neither profitable. Same incumbent feature set, fold purge, 4h horizon, 15m delay, seed/C, threshold .70 for either profitable side (not equivalent signal coverage to binary .70), no overlap. Evaluate primary/stress economics and multiclass Brier vs train class priors, not binary Brier directly. Funding only in labels, never predictor; cache keyed by data, code, funding and libraries. No holdout/tuning. Exploratory target adaptation, full-text mapping pending; runtime pending. Next triple-barrier design with gap-aware minute paths and explicit ambiguity rules.
+
+```cmd
+git pull origin main
+python cost_aware_target_engine.py
+```
+Upload data/reports/21_cost_aware_target.zip.
