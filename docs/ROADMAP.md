@@ -206,3 +206,12 @@ git pull origin main
 python stateful_rule_engine.py
 ```
 Upload data/reports/13_stateful_rules.zip. Script commit bd7e043.
+
+## Checkpoint — stateful technical screening
+Source: 13_stateful_rules.zip, prior report assessment: Channel100 123 included trades, expectancy +1.1085%, PF 1.423, fixed-notional P&L +136.34%; stressed P&L +114.03%; four funding-affected trades excluded, mean holding approximately 237h. SMA50/200 and Channel50 positive at primary costs but not stressed costs. Park remaining 15 configurations; retain Channel100 as exploratory challenger, not a replacement for Logistic. Exposure and risk differ materially. Next: channel_audit_engine.py (3821862), same first/last incumbent decision dates but independent continuous hourly grid, causal 100-bar channel, 15m execution delay, raw minute-open fills, reversal on opposite breakout. Fail on missing signal or execution coverage; report missing funding events intersecting all selected trades, without dropping trades. If funding incomplete, targeted recovery required before portfolio accounting. No parameter tuning or holdout. Runtime pending; detailed source results should be verified against original report before final selection.
+
+```cmd
+git pull origin main
+python channel_audit_engine.py
+```
+Upload data/reports/14_channel_audit.zip regardless of status.
