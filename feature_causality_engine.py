@@ -28,7 +28,7 @@ def compare(x,y,cols):
         raise ValueError("Decision grid mismatch")
     return {c:int((~same(x[c].cast(pl.Float64).to_numpy(),y[c].cast(pl.Float64).to_numpy())).sum()) for c in cols}
 
-def audit(out):
+def audit(out, export=False):
     src=ROOT/"resampled"/S/"1h"
     paths=[p for p in sorted((ROOT/"features"/S/"1h").glob("*.parquet")) if "2021-01"<=p.stem<="2024-12"]
     if len(paths)!=48:raise ValueError("Expected 48 feature months")
@@ -67,6 +67,9 @@ def audit(out):
             if extra==0:
                 original=x
                 row["auxiliary_mismatches"]=compare(cached,x,AUX_FEATURES+[k+"_age_ms" for k in aux])
+            if export and extra:
+                target=ROOT/"lag_features"/str(extra//60000)/S/"1h"/p.name
+                de.atomic_write(x.with_columns(pl.lit(S).alias("symbol")).select("symbol","decision_time",*BASE_FEATURES,*AUX_FEATURES),target)
             stats={}
             for c in AUX_FEATURES:
                 v=x[c].cast(pl.Float64).to_numpy(); old=original[c].cast(pl.Float64).to_numpy()
@@ -84,7 +87,11 @@ def audit(out):
 
 def main():
     out={"scope":"BTC development cached feature replay; sampled technical prefix invariance; assumed lag sensitivity only, not actual publication-time verification or economic sensitivity","months":[]}
-    try:audit(out)
+    import argparse
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--export-lags",action="store_true")
+    args=parser.parse_args()
+    try:audit(out,args.export_lags)
     except Exception:
         out["status"]="fail";out["error"]=traceback.format_exc()
     path=ROOT/"reports"/"09_feature_causality.zip"
