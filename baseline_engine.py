@@ -59,7 +59,27 @@ def load_fold(pairs,cols,fold,missing_policy="median"):
     if train.height<100 or test.height<30:raise ValueError("Insufficient valid fold rows")
     return train,test
 
-def fit_score(train,test,cols,model,params,threads,seed,prediction_path=None):
+def causal_state_fill(train,test,cols):
+    # Only state variables; carry at most one decision hour, not repeated fills.
+    state={"sum_open_interest","sum_open_interest_value","count_long_short_ratio"}
+    last={}
+    def transform(frame):
+        values=frame.select(cols).to_numpy().astype(float,copy=True)
+        flags=(~np.isfinite(values)).astype(float)
+        for i,(s,t) in enumerate(frame.select("symbol","decision_time").iter_rows()):
+            for j,c in enumerate(cols):
+                v=values[i,j]; key=(s,c)
+                if np.isfinite(v):
+                    if c in state:last[key]=(t,v)
+                else:
+                    values[i,j]=np.nan
+                    if c in state and key in last and 0<t-last[key][0]<=3600000:
+                        values[i,j]=last[key][1]
+        return values,flags
+    X,M=transform(train); Xt,Mt=transform(test)
+    return X,Xt,M,Mt
+
+def fit_score(train,test,cols,model,params,threads,seed,prediction_path=None,imputation="median"):
     def export(pred,base):
         if prediction_path is None:return
         if not np.isfinite(pred).all():raise ValueError("Nonfinite predictions")
@@ -77,8 +97,14 @@ def fit_score(train,test,cols,model,params,threads,seed,prediction_path=None):
         inner=train.filter(pl.col("decision_time")>=cut)
         if fit.height<100 or inner.height<30:raise ValueError("Insufficient inner validation rows")
     X=fit.select(cols).to_numpy(); Xt=test.select(cols).to_numpy()
-    imp=SimpleImputer(strategy="median",add_indicator=True,keep_empty_features=True)
-    X=imp.fit_transform(X); Xt=imp.transform(Xt)
+    if imputation=="bounded-state":
+        X,Xt,M,Mt=causal_state_fill(fit,test,cols)
+        imp=SimpleImputer(strategy="median",add_indicator=False,keep_empty_features=True)
+        active=M.any(axis=0)
+        X=np.column_stack((imp.fit_transform(X),M[:,active])); Xt=np.column_stack((imp.transform(Xt),Mt[:,active]))
+    else:
+        imp=SimpleImputer(strategy="median",add_indicator=True,keep_empty_features=True)
+        X=imp.fit_transform(X); Xt=imp.transform(Xt)
     y=fit["target_return"].to_numpy(); yt=test["target_return"].to_numpy()
     with threadpool_limits(limits=threads):
         if model in ("ridge","logistic"):
@@ -144,6 +170,7 @@ def main():
     p.add_argument("--test-days",type=int,default=30)
     p.add_argument("--model",choices=["ridge","logistic","rf","xgb"],default="ridge")
     p.add_argument("--aux",action="store_true")
+    p.add_argument("--imputation",choices=["median","bounded-state"],default="median")
     p.add_argument("--missing-policy",choices=["median","common-complete"],default="median")
     p.add_argument("--drop-features",nargs="+",default=[])
     p.add_argument("--delay-minutes",type=int,choices=[15,60],default=60)
@@ -153,6 +180,7 @@ def main():
     p.add_argument("--seed",type=int,default=42)
     a=p.parse_args()
     if a.delay_minutes!=60 and (a.tf!="1h" or set(a.symbols)!={"BTCUSDT"}):p.error("15m delay pilot supports BTC hourly only")
+    if a.imputation!="median" and (a.model!="logistic" or not a.aux or a.tf!="1h" or a.missing_policy!="median" or a.trials):p.error("Bounded state pilot requires hourly auxiliary logistic with full eligibility and no tuning")
     if a.trials and a.export_predictions:p.error("Export is for fixed configurations only")
     if a.trials<0:p.error("Negative trial count")
     if a.horizon*3600000%STEPS[a.tf]:p.error("Horizon must be a multiple of timeframe")
@@ -190,6 +218,7 @@ def main():
           "polars":pl.__version__,"model":a.model,"features":cols,"tf":a.tf,"horizon":a.horizon,
           "delay_minutes":a.delay_minutes,"seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
     if a.missing_policy!="median":spec["missing_policy"]=a.missing_policy
+    if a.imputation!="median":spec["imputation"]=a.imputation
     if a.export_predictions:spec["prediction_export"]=1
     if a.model=="xgb":
         import xgboost
@@ -204,7 +233,7 @@ def main():
             prediction_path=out/"predictions"/(str(fold.fold_id)+".parquet") if a.export_predictions else None
             def compute():
                 train,test=load_fold(pairs,cols,fold,a.missing_policy)
-                return fit_score(train,test,cols,a.model,params,a.threads,a.seed,prediction_path)
+                return fit_score(train,test,cols,a.model,params,a.threads,a.seed,prediction_path,a.imputation)
             result=checkpoint(out/"folds",fspec,fold.fold_id,compute)
             if prediction_path is not None and not prediction_path.exists():
                 # Recover missing output without trusting a metrics-only checkpoint.
