@@ -290,3 +290,12 @@ git pull origin main
 python triple_barrier_engine.py
 ``
 Upload data/reports/22_triple_barrier.zip regardless of status.
+
+## Checkpoint — triple barrier PASS, park
+Source 22_triple_barrier.zip, experiment dae053159060075148792924c01a8dd4eec71ab0480514037663c0933479d9ce. OOS class counts short/flat/long 12899/3928/13244. Multiclass Brier .603344225 vs prior .604393726, accuracy 44.365%. Retrained barrier: 29 trades, expectancy .177006%, PF 1.189877, P&L 5.133185%, DD 14.291142%; stress P&L -.099116%, both nominal CIs cross zero at both costs. Incumbent with barrier: 124 trades, expectancy .387040%, PF 1.622795, P&L 47.992968%, DD 12.171551%; stress P&L 25.614884%, nominal CIs positive at primary but cross zero at stress. Exit-only comparator allows reentry after earlier exits, so not a paired same-trade exit comparison. Park both tested barrier configurations; not a rejection of all adaptive exits. Next excursion_engine.py (0145b4c): read frozen binary and cost-aware predictions, selected 104/63 trades; validate original raw minute coverage and endpoints, compute gross MAE/MFE/giveback and timing quantiles by wins/losses; compare overlapping decision keys. No executable extrema or intrabar order assumptions, no optimized TP/SL; diagnostics only. Requires local 21_cost_aware_target.zip and cached predictions. Runtime pending; no holdout or retraining. After this close initial target diagnostics and move to multi-asset/cross-sectional expansion, unless a material integrity issue arises.
+
+```cmd
+git pull origin main
+python excursion_engine.py
+```
+Upload data/reports/23_excursions.zip.
