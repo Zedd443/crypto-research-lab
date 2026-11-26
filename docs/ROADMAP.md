@@ -197,3 +197,12 @@ git pull origin main
 python technical_rule_engine.py
 ```
 Upload data/reports/12_technical_rules.zip.
+
+## Checkpoint — fixed-holding technical rules V1 complete
+Source: 12_technical_rules.zip; all 16 rules negative after primary and stressed costs. Best per family by expectancy: SMA20/50 -0.107105%, PF .75244 (6027 trades); RSI14/40 -0.106521%, PF .75747 (4448); momentum50/2% -0.103946%, PF .78498 (3575); channel100 -0.056710%, PF .89513 (512). Incumbent reproduced 104 trades, +0.5511946%, PF 2.32961, fixed-notional P&L +57.32424%; stressed +0.370700%, PF 1.75688. Unknown funding exclusions vary by rule (2–20); estimates conditional on known funding. Always-long and always-short controls negative. Reject fixed 4h configurations, not entire rule families. Next: one bounded stateful exit sensitivity on same 16 configurations, no parameter expansion. Channel holds until opposite breakout; SMA/momentum/RSI use signal state, flat on neutral, reverse on opposite; exit delay 15m, terminal close on final eligible decision. Same common decision grid, gaps may delay exits (reported); no claims of fully native continuous-market execution or exact paper replication. Fee/slip 0/0 (funding remains), 5/1 and 10/5. Report duration/exposure and missing funding exclusions. If positive candidates appear, verify funding coverage and continuous hourly execution and MTM before tuning; otherwise park these rule implementations and move to feature/target research, retaining OBV/filter/other paper-specific hypotheses as untested. Source: Deprez & Frömmel 2024 appendix B, adaptations not replication. Runtime pending; no holdout or retraining.
+
+```cmd
+git pull origin main
+python stateful_rule_engine.py
+```
+Upload data/reports/13_stateful_rules.zip. Script commit bd7e043.
