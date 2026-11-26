@@ -263,3 +263,12 @@ git pull origin main
 python market_structure_engine.py
 ```
 Upload data/reports/19_market_structure.zip.
+
+## Checkpoint — market structure V2 PASS, park
+Source 19_market_structure.zip, experiment 10ccd7ac93835947a0e3b172f67c99933be4ad58b70cb898a46d84a2a9931221. 35,064 rows, missing 20/20/100/100/100. DA 52.415949%, Brier .250750311. Primary: 181 trades, expectancy .1990086%, PF 1.351700, fixed-notional P&L 36.020551%, DD 13.134184%; stress P&L 3.390908%, PF 1.028837, DD 17.564786%. All nominal bootstrap intervals cross zero. Park market structure V2. Next multi_timeframe_engine.py (1793279), six frozen additions: completed 4h return over 6 bars, SMA20 gap and volatility20; completed daily return over 7 bars, SMA20 gap and volatility20. UTC-aligned aggregation from complete hourly bars, gap-aware rolling, causal backward join restricted to age less than one higher-timeframe bar. No incomplete or future bars. Same incumbent folds, eligibility, labels, threshold and costs. Exploratory engineering hypothesis, not verified journal replication; full literature mapping pending. Runtime unverified. No tuning or holdout. Close initial feature V2 screening after this run; then target engineering.
+
+```cmd
+git pull origin main
+python multi_timeframe_engine.py
+```
+Upload data/reports/20_multi_timeframe.zip.
