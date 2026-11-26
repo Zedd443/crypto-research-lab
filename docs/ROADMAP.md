@@ -139,3 +139,14 @@ python -m pytest -q
 python integrity_engine.py
 ```
 Upload data/reports/08_integrity.zip even on audit failure. Preserve all prior checkpoints. Do not rerun completed robustness screening merely to update code hashes.
+
+## Checkpoint — integrity audit PASS (2026-11-26)
+Source: 08_integrity.zip. Dataset SHA256 06e9533c3b29d33a567e4f40d9164188c7adf705cc366a9a075e166b0fb14600; 70,118 raw endpoint checks, four experiments verified. Export counts 30,071 / 30,071 / 29,120 / 29,120 (A/B/C/D). Brier 0.25019464 / 0.25537608 / 0.25015834 / 0.25465313 versus naive 0.24994112 / 0.24994112 / 0.24993589 / 0.24993589; all negative skill. DA 52.21 / 51.30 / 52.34 / 51.39 percent. Economic metrics reproduced: expectancy 0.5511946 / -0.0142576 / 0.3852590 / -0.0305995 percent; funding exclusions 0/5/0/0. Preserve detailed results in roadmap and local reports; user requests concise next-step commands only unless detailed analysis requested. Audit is not certification of feature causality or model replay.
+
+Next: feature_causality_engine.py (bebbc22), monthly development-only cached feature replay, sampled prefix invariance and additional auxiliary lag scenarios 0/5/15/60 minutes, with original tolerances. Read-only caches; no model fitting. This tests feature availability under assumptions and coverage/value changes, not actual historical publication timestamps or economic sensitivity. Runtime acceptance pending.
+
+```cmd
+git pull origin main
+python feature_causality_engine.py
+```
+Upload data/reports/09_feature_causality.zip even if fail.
