@@ -170,22 +170,38 @@ def download(root,symbol,start,end,repair=False):
         if historical and not repair and cache_valid(report,path,old,a,b):
             print(symbol,month.date(),"cached (retrieval; see quality audit)",flush=True)
             continue
-        parts=[old]
+        # Preserve existing observations; only append verified missing rows.
+        lower,upper=ms(month),min(ms(nxt),ms(datetime.now(UTC))//MINUTE*MINUTE)
+        merged=clean(old,lower,upper)
+        def append_missing(candidate,source):
+            nonlocal merged
+            if candidate is None or not candidate.height:
+                return
+            candidate=clean(candidate,lower,upper)
+            overlap=candidate.join(merged,on="open_time",how="inner",suffix="_existing")
+            if overlap.height and overlap.filter(pl.any_horizontal([pl.col(k)!=pl.col(k+"_existing") for k in FIELDS if k!="open_time"])).height:
+                raise ValueError("Conflicting existing observations: "+source)
+            new=candidate.join(merged.select("open_time"),on="open_time",how="anti")
+            if new.height:
+                merged=clean(pl.concat([merged,new]),lower,upper)
+                atomic_write(merged,path)
+                print(symbol,month.date(),source,"added",new.height,flush=True)
         full=archive(symbol,"monthly",month.strftime("%Y-%m")) if nxt<=datetime.now(UTC) else None
-        if full is not None:
-            parts.append(full)
-        else:
-            wanted=sorted({d for x,y in missing for d in days(datetime.fromtimestamp(x/1000,UTC),datetime.fromtimestamp(y/1000,UTC))})
-            for d in wanted:
-                daily=archive(symbol,"daily",d.strftime("%Y-%m-%d"))
-                if daily is not None:
-                    parts.append(daily)
-                elif d>=datetime.now(UTC)-timedelta(days=7):
-                    parts.append(rest(symbol,max(a,ms(d)),min(b,ms(d+timedelta(days=1)))))
-        # Keep rows outside a user-requested subrange when updating a partition.
-        merged=clean(pl.concat(parts),ms(month),min(ms(nxt),ms(datetime.now(UTC))//MINUTE*MINUTE))
-        if merged.height:
-            atomic_write(merged,path)
+        append_missing(full,"monthly")
+        pending=list(gaps(clean(merged,a,b),a,b))
+        wanted=sorted({d for x,y in pending for d in days(datetime.fromtimestamp(x/1000,UTC),datetime.fromtimestamp(y/1000,UTC))})
+        for d in wanted:
+            daily=archive(symbol,"daily",d.strftime("%Y-%m-%d"))
+            append_missing(daily,"daily "+d.strftime("%Y-%m-%d"))
+        # Historical REST fallback only for explicitly requested repairs; no synthetic candles.
+        pending=list(gaps(clean(merged,a,b),a,b))
+        for x,y in pending:
+            if repair or x>=ms(datetime.now(UTC)-timedelta(days=7)):
+                try:
+                    append_missing(rest(symbol,x,y),"REST "+str(x))
+                except requests.RequestException as e:
+                    print(symbol,"REST unavailable",repr(e),flush=True)
+        # No rewrite when all sources return identical or empty observations.
         remaining=list(gaps(clean(merged,a,b),a,b))
         report=root/"metadata"/symbol/(month.strftime("%Y-%m")+".json")
         report.parent.mkdir(parents=True,exist_ok=True)
