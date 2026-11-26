@@ -38,12 +38,12 @@ def digest(paths):
             for block in iter(lambda:f.read(1024*1024),b""):h.update(block)
     return h.hexdigest()
 
-def load_fold(pairs,cols,fold):
+def load_fold(pairs,cols,fold,missing_policy="median"):
     frames=[]
     for p,q in pairs:
         # Predicate pushdown; no holdout rows enter any development fold.
         cond=pl.col("decision_time").is_between(fold.train_start,fold.test_end,closed="left")
-        x=pl.scan_parquet(p).filter(cond).select("symbol","decision_time",*list(dict.fromkeys([*BASE_FEATURES,*cols])))
+        x=pl.scan_parquet(p).filter(cond).select("symbol","decision_time",*list(dict.fromkeys([*BASE_FEATURES,*cols,*(FEATURES if missing_policy!="median" else [])])))
         y=pl.scan_parquet(q).filter(cond & (pl.col("label_end")<fold.test_end)).select("symbol","decision_time","label_end","target_return","entry_time","entry_price","exit_price")
         f=x.join(y,on=["symbol","decision_time"],how="inner",validate="1:1").collect()
         if f.height:frames.append(f)
@@ -51,6 +51,10 @@ def load_fold(pairs,cols,fold):
     f=pl.concat(frames).filter(pl.col("target_return").is_finite())
     # Warm-up required for the core features, optional auxiliaries may be null.
     f=f.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in BASE_FEATURES]))
+    f=f.with_columns([pl.when(pl.col(c).is_finite()).then(pl.col(c)).otherwise(None).alias(c) for c in dict.fromkeys([*BASE_FEATURES,*cols])]) if missing_policy!="median" else f
+    if missing_policy!="median":
+        reduced=[c for c in FEATURES if c not in {"body","count_toptrader_long_short_ratio","sum_toptrader_long_short_ratio","sum_taker_long_short_vol_ratio"}]
+        f=f.filter(pl.all_horizontal([pl.col(c).is_finite().fill_null(False) for c in reduced]))
     train,test=select_fold(f,fold)
     if train.height<100 or test.height<30:raise ValueError("Insufficient valid fold rows")
     return train,test
@@ -140,6 +144,7 @@ def main():
     p.add_argument("--test-days",type=int,default=30)
     p.add_argument("--model",choices=["ridge","logistic","rf","xgb"],default="ridge")
     p.add_argument("--aux",action="store_true")
+    p.add_argument("--missing-policy",choices=["median","common-complete"],default="median")
     p.add_argument("--drop-features",nargs="+",default=[])
     p.add_argument("--delay-minutes",type=int,choices=[15,60],default=60)
     p.add_argument("--export-predictions",action="store_true")
@@ -184,6 +189,7 @@ def main():
     spec={"manifest_id":protocol["manifest_id"],"code":code,"sklearn":sklearn.__version__,
           "polars":pl.__version__,"model":a.model,"features":cols,"tf":a.tf,"horizon":a.horizon,
           "delay_minutes":a.delay_minutes,"seed":a.seed,"threads":a.threads,"objective":"development_brier" if a.model=="logistic" else "development_mse"}
+    if a.missing_policy!="median":spec["missing_policy"]=a.missing_policy
     if a.export_predictions:spec["prediction_export"]=1
     if a.model=="xgb":
         import xgboost
@@ -197,7 +203,7 @@ def main():
             fspec={**spec,"params":params}
             prediction_path=out/"predictions"/(str(fold.fold_id)+".parquet") if a.export_predictions else None
             def compute():
-                train,test=load_fold(pairs,cols,fold)
+                train,test=load_fold(pairs,cols,fold,a.missing_policy)
                 return fit_score(train,test,cols,a.model,params,a.threads,a.seed,prediction_path)
             result=checkpoint(out/"folds",fspec,fold.fold_id,compute)
             if prediction_path is not None and not prediction_path.exists():
