@@ -177,3 +177,14 @@ python portfolio_engine.py
 Upload data/reports/10_portfolio.zip even if fail.
 
 Research decision log alignment: incumbent is a benchmark, not exclusive winner. After economic accounting and conditional DA/calibration diagnostics, open controlled candidate branches: technical rules, feature V2, alternative targets/triple barrier, multi-asset and cross-sectional/ProSP, other evidence-driven hypotheses. Read relevant full-text papers before each substantive branch. Only screen-positive candidates enter bounded nested tuning; record search universe and stop rules before runs. Do not use holdout for selection. Separate active/parked/completed/failed branches. No required return target or fixed number of tuning steps. User requests compact execution instructions; retain detailed findings in roadmap.
+
+## Checkpoint — portfolio replay PASS
+Source: 10_portfolio(1).zip. 104 trades, 24,960/24,960 valid intratrade mark minutes; zero affected trades after isolated mark recovery. Previous local tests: 18 passed, 2 grouped-asof warnings. Repair commits 05fde7c/e63de7a; diagnostics 3eb2119. Original raw caches untouched. Primary fee/slip 5/1 bps: fixed-notional P&L 57.32424%; compounded return at 25/50/100% notional fractions 15.26845/32.54864/74.03352%; minute-open MTM DD 3.39362/6.65127/12.79002%; annualized daily Sharpe 1.60376/1.60223/1.59919. Exposure 1.37566%. Cost stress 5/3: compounded 14.07287/29.81686/66.95142%; 10/5: 9.99011/20.70013/44.36823%, DD 3.52330/6.90327/13.26601%. Not sizing recommendations or independently validated returns; minute-open marks omit intraminute extremes; funding boundary and cost assumptions remain. Repair provenance metadata local, not included in portfolio ZIP.
+
+Next: conditional_da_engine.py (2b1d80a) frozen incumbent exported predictions only, direction accuracy by confidence/side, reliability bins, ECE, Brier versus naive, per-signal cost-aware returns (overlapping, not portfolio) and selected nonoverlap ledger. Fixed bins are descriptive, not optimized thresholds. No training, holdout or calibration fit. This is a generic diagnostic, not a replication of Arain & Snudden's formal conditional DA methodology; review full paper before any formal replication. Runtime pending. After this diagnostic open candidate expansion, not indefinite incumbent tuning.
+
+```cmd
+git pull origin main
+python conditional_da_engine.py
+```
+Upload data/reports/11_conditional_da.zip.
