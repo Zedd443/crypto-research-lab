@@ -155,6 +155,27 @@ def cache_valid(report,path,old,a,b):
     except (ValueError,KeyError,TypeError,OSError):
         return False
 
+# Exact source anomalies verified in 33_invalid_candles.zip.
+KNOWN_BAD_TIME=1701347700000
+KNOWN_BAD_ROWS={
+    "DOTUSDT":[1701347700000,5.193,5.194,5.188,5.191,5943.7,1701347759999,145486.6748,318,12524.4,64994.2472],
+    "SUIUSDT":[1701347700000,.6047,.6051,.604,.605,51979.5,1701347759999,100835.50245,340,60168.1,36373.28284],
+    "XRPUSDT":[1701347700000,.6038,.6038,.6034,.6036,91695.7,1701347759999,200298.79368,470,132462.5,79957.28937],
+}
+def quarantine_known(root,symbol,candidate,source):
+    if symbol not in KNOWN_BAD_ROWS or candidate is None or not candidate.height:
+        return candidate
+    hit=candidate.filter(pl.col("open_time")==KNOWN_BAD_TIME)
+    if not hit.height:
+        return candidate
+    expected=dict(zip(FIELDS,KNOWN_BAD_ROWS[symbol]))
+    if not all(row==expected for row in hit.select(FIELDS).to_dicts()):
+        return candidate
+    record=root/"quarantine"/symbol/(str(KNOWN_BAD_TIME)+".json")
+    write_json(record,{"symbol":symbol,"row":expected,"reason":"Inconsistent total and taker base volume; report 33 monthly/daily/REST agree","last_source":source})
+    print(symbol,"quarantined",KNOWN_BAD_TIME,source,flush=True)
+    return candidate.filter(pl.col("open_time")!=KNOWN_BAD_TIME)
+
 def download(root,symbol,start,end,repair=False):
     for month,nxt in months(start,end):
         a,b=ms(max(start,month)),ms(min(end,nxt))
@@ -177,6 +198,7 @@ def download(root,symbol,start,end,repair=False):
             nonlocal merged
             if candidate is None or not candidate.height:
                 return
+            candidate=quarantine_known(root,symbol,candidate,source)
             candidate=clean(candidate,lower,upper)
             overlap=candidate.join(merged,on="open_time",how="inner",suffix="_existing")
             if overlap.height and overlap.filter(pl.any_horizontal([pl.col(k)!=pl.col(k+"_existing") for k in FIELDS if k!="open_time"])).height:
