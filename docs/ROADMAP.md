@@ -344,3 +344,15 @@ git pull origin main
 python prosp_engine.py
 ```
 Upload data/reports/28_prosp.zip.
+
+## Checkpoint — ProSP V1 PASS; eliminate tested configuration from tuning
+Source 28_prosp.zip, experiment ce693e976a4c3c2575ae36cc0b51d44b44cc7a1a50ad05d4b67cb8db6a106642. Dual/single gross expectancy (%) .005360/.000397, at 1bp -.003907/-.019605, at standard 5+1bps -.050243/-.119618; standard PF .666047/.585253. 7518 scheduled baskets, dual 4035 flat, 11237 overlap pairs removed. Brier .551716 vs .56 prior. Both standard-cost nominal CIs negative, no funding. Eliminate this 11-feature configuration from tuning; no complexity escalation. Original feature specification remains a separate bounded test. Rechecked local paper S0378437126006473, Section 3.3 equations 1–6 and Table 3: Set 1 28 dims (current return/turnover, five cumulative return and turnover windows, 12 lagged normalized returns, four normalized cumulative returns); Set 2 12 dims (log basis, five 7–35 day basis momentum, price-volume and five variance windows). Quote volume candidate proxy for turnover; exact vendor definition and equation 6 variance notation require explicit interpretation. Section 6.4 favors 8h but reports cost sensitivity. Next prosp_readiness_engine.py (0253956): audit exact aligned spot closes and futures volume inputs at 4h/8h, conservative 35-day contiguous endpoint history, balanced coverage across ten survivor assets. No training, downloads, or holdout. Runtime pending; spot endpoint availability is not full publication-time verification.
+
+### Candidate registry (exploratory; no final deployment approval)
+C01 BTC logistic technical incumbent; C02 BTC logistic cost-aware primary challenger; C03 BTC channel100 secondary non-ML; C04 BTC market regime reserve; C05 BNB logistic and C06 ETH logistic exploratory reserves. C01/C02 priority for future bounded nested tuning only after remaining research and integrity/portfolio gates; C03–C06 require additional evidence. Eliminate previously failed configurations from tuning, preserve negative evidence and raw data; no paper, model family or asset permanently rejected. P1DR 24h horizon and pairs trading remain pending. No holdout-based selection.
+
+```cmd
+git pull origin main
+python prosp_readiness_engine.py
+```
+Upload data/reports/29_prosp_readiness.zip.
