@@ -44,7 +44,9 @@ def audit(out):
     out["missing_execution_minutes"]=np.setdiff1d(wanted,prices["open_time"].to_numpy()).tolist()
     if out["missing_execution_minutes"] or prices["open_time"].n_unique()!=prices.height:raise ValueError("Invalid execution coverage")
     t=t.join(prices.rename({"open_time":"entry_time","open":"entry_price"}),on="entry_time",validate="m:1").join(prices.rename({"open_time":"label_end","open":"exit_price"}),on="label_end",validate="m:1").sort("entry_time")
-    fund=ledger(ROOT)
+    from funding_repair_engine import apply, OUT
+    fund=apply(ledger(ROOT))
+    out['funding_repair_provenance']=json.loads(OUT.read_text()) if OUT.exists() else {}
     missing=fund.filter(pl.col("mark_price").is_null())["event_time"].to_numpy()
     affected=[]
     for row in t.iter_rows(named=True):
@@ -54,7 +56,7 @@ def audit(out):
     if affected:
         out["status"]="funding_repair_required"
         return
-    out["metrics"]=[{"fee_bps":fee,"slippage_bps":slip,**metrics(score_trades(t,fee,slip,fund,{"BTCUSDT":[(A,B)]}),first//DAY*DAY,((last+900000)//DAY+1)*DAY)} for fee,slip in [(5,1),(10,5)]]
+    out["metrics"]=[{"fee_bps":fee,"slippage_bps":slip,**metrics(score_trades(t,fee,slip,fund.filter(pl.col("mark_price").is_not_null()),{"BTCUSDT":[(A,B)]}),first//DAY*DAY,((last+900000)//DAY+1)*DAY)} for fee,slip in [(5,1),(10,5)]]
     out["status"]="pass"
 def main():
     out={"scope":"Channel 100, frozen 15m delay, same start/end decision dates as incumbent but independent hourly eligibility, opposite breakout reversal, terminal close, no missing funding exclusion; fixed-notional diagnostic only"}
