@@ -5,19 +5,21 @@ Goal: test net economic edge, not prove ML or manual trading superior. The 37-co
 ## Progress
 - [x] E00a: 1m klines, monthly Parquet, checksum, gaps, UTC aggregation.
 - [x] E00b: archive inventory, derivatives metrics, funding, mark/index/premium, spot reference, 4 workers.
-- [x] E00c: partial historical OHLCV cache, explicit repair, per-symbol dataset error queue; regression test added (execution to be verified).
+- [x] E00c: partial historical OHLCV cache, explicit repair, per-symbol dataset error queue; regression test added; historical local suite passed.
 - [x] FNG downloader, RSS collector, optional FinBERT and JSONL import (runtime not verified).
 - [ ] E00d: verified listing/delisting and historical TradFi sessions, calendar-aware coverage, complete local audit and EDA, repair failed datasets.
 - [ ] E00e: historical news and macro availability, trade-level data for microstructure; audit coverage before use.
 - [ ] E01: point-in-time feature and label dataset, timestamp continuity, train-only preprocessing.
 - [ ] E02: shared chronological validation and net execution/portfolio accounting; unit tests before model training.
-- [ ] E03: technical and naive baselines; regression/classification benchmarks.
-- [ ] E04: ranking/ProSP, triple barrier, derivatives/cascade, microstructure, macro, sentiment experiments.
-- [ ] E05: nested tuning, ablation, parameter stability, cost and statistical robustness.
+- [x] E03a: BTC hourly technical and naive predictive baselines; 1/4/8/24h horizons; initial derivatives comparison, development only.
+- [ ] E03b: rule-based trading baselines and predictive diagnostics on revised labels.
+- [x] E04a: BTC fixed-signal execution-delay comparison, 15m relabel/retrain, economic screening, 12 leave-one-out ablations and feature missingness audit (local reports).
+- [ ] E04b: reduced derivatives, controlled missingness experiments, revised features and targets, ranking/ProSP, triple barrier, cascade, microstructure, macro and sentiment.
+- [ ] E05: integrity audit, nested selection, parameter stability, portfolio accounting, cross-asset validation and multiple-testing-adjusted robustness.
 - [ ] E06: frozen holdout, forward paper evaluation, accept/reject conclusions.
 
 ## Implemented infrastructure (runtime acceptance required)
-- `feature_engine.py`: source-dependent cached monthly partitions; gap-segmented technical features; bounded causal joins; separate open-to-open label tables with one full-bar execution delay. Auxiliary release lags are explicit assumptions, not verified publication timestamps. Macro/news and TradFi calendar coverage are not fabricated.
+- `feature_engine.py`: source-dependent cached monthly partitions; gap-segmented technical features; bounded causal joins; separate open-to-open label tables; original full-bar delay and isolated 15-minute BTC hourly pilot labels. Auxiliary release lags are explicit assumptions, not verified publication timestamps. Macro/news and TradFi calendar coverage are not fabricated.
 - `validation_protocol.py`: shared global chronological folds, actual-label-end purge, nonoverlapping validation windows and frozen holdout manifest.
 - `experiment_store.py`: single locked Optuna coordinator, persistent SQLite study, total trial budget, interrupted-trial requeue, completed fold checkpoints, median pruning. Exact sampler trajectory after restart is not guaranteed. Mid-fit model state is deliberately not checkpointed.
 - `baseline_engine.py`: Ridge, logistic, Random Forest and XGBoost development diagnostics; train-only imputation/scaling; inner chronological early stopping for XGBoost; persistent fold results. Predictive loss is not an economic benchmark. No holdout evaluation in this command.
@@ -60,25 +62,49 @@ No nested four-by-four parallelism; no multi-process SQLite optimization; no mid
 
 Local data completeness and CI status must be verified separately from code commits.
 
-## Validation bundles and BTC pilot
-Run after the download stops; review each ZIP before the next gate. Reports are diagnostic, not a certificate of data quality. Existing raw partitions are not changed.
+## Research checkpoint — 2026-11-26
+
+Source: user-provided local validation bundles; raw Parquet files and historical report ZIPs are not committed here. Treat all candidate results as development diagnostics, not verified live edge.
+
+| Stage | Result |
+|---|---|
+| Data acquisition | 37 instruments with data, 75,779,089 reported minute candles; 9 instruments with unresolved repair errors; listing/delisting and TradFi calendars unverified |
+| BTC data | 3,628,800 reported minute candles, zero missing minutes; January 2024 native aggregation comparison 3,937 rows, zero reported mismatches |
+| Local test suite | 18 passed; 2 grouped as-of sortedness warnings; latest restored code not yet locally retested |
+| Compute benchmark | 1/2/4 workers: 2.34/1.81/1.73 seconds; peak tree RSS 138/387/656 MiB; local aggregation only |
+| Initial predictive baseline | All 10 model/horizon experiments had negative skill versus naive MSE/Brier benchmarks |
+| 60m delay economic screen | 5/44 technical and 2/44 technical+derivatives configurations positive under primary cost assumption; no candidate with both nominal bootstrap lower bounds positive |
+| Paired delay sensitivity | 1/5/15/60 minute delay: 9/11/12/7 of 88 positive; best expectancy 0.5679/0.5778/0.7175/0.1605 percent; fixed original predictions and signal schedule |
+| 15m retraining | Logistic 4h technical candidate at symmetric 0.70 confidence: 104 trades, net expectancy 0.53817%, PF 2.07294, fixed-notional P&L 55.9697%, realized fixed-notional drawdown 9.3569% |
+| Ablation | 12 single-feature removals completed. Without body: 104 trades, expectancy 0.55119%, PF 2.32961, fixed-notional P&L 57.3242%. Without relative_volume_20: 95 trades, expectancy 0.58737%, P&L 55.8003%. Removal of ret_1 reproduced baseline reported metrics exactly; inspect redundancy and prediction identity. |
+| Missingness audit | 35,064/35,064 hourly rows; 35,063 complete core rows; 27,066 complete all-feature rows. Top trader ratios ~22% missing, taker ratio ~9%; extended contiguous outages. |
+| Current stage | Reduced derivatives test not yet reported; then controlled missingness and integrity audit before further tuning |
+
+Primary cost: 5 bps fee + 1 bp slippage per side, plus funding; funding schedule 4,383 events, 24 missing settlement marks; impacted trades excluded after original selection. Mark minute-open is a proxy. Fixed-notional P&L is NOT compounded portfolio return. Drawdown excludes intratrade floating losses. Bootstrap intervals use 7/30-day calendar blocks, 10,000 replicates; no multiple-testing adjustment yet. The candidate was selected from reused development data. Holdout 2025 reserved, not certified unseen due to prior research exposure. No production readiness claim.
+
+## Artifact registry and reproducibility
+
+Reports under data/reports: 01_data_quality.zip, 02_feature_label.zip, 03_predictive_benchmark.zip, 04_signal_diagnostics.zip, 05_robustness.zip, 06_execution_delay.zip, 07_missing_data.zip. Compute benchmark: data/metadata/compute_benchmark.json. Local archives with browser suffixes (1), (2), etc. are snapshots; keep them outside source control unless explicitly curating a small anonymized research artifact. Code restored to GitHub: baseline ablation with common eligibility, delay_labels.py, delay_engine.py (now excludes already-relabelled experiments), missing_data_engine.py. Source digest changes may produce new experiment IDs; do not automatically retrain or delete previous checkpoints. Local patches may conflict; reconcile using git diff, preserve data and experiment folders, never force reset.
+
+## Next command — reduced derivatives BTC (development diagnostic only)
+
+Windows CMD, repository root with .venv activated. After local/remote reconciliation and pytest:
 ```cmd
-python research_pipeline.py audit --workers 4
-python research_pipeline.py compare --symbols BTCUSDT --start 2024-01-01 --end 2024-02-01
-python report_engine.py data
-python news_engine.py fng
-python benchmark_engine.py --partitions 24 --workers 1 2 4 --repeats 3
-python feature_engine.py --symbols BTCUSDT --tf 1h --workers 1
-python report_engine.py features --start 2021-01-01 --end 2025-01-01
+python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model logistic --delay-minutes 15 --aux --drop-features body count_toptrader_long_short_ratio sum_toptrader_long_short_ratio sum_taker_long_short_vol_ratio --export-predictions
+python robustness_engine.py
 ```
-Pilot development (holdout reserved, not certified unseen):
-```cmd
-for %M in (ridge logistic rf xgb) do python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model %M
-python report_engine.py baseline
-```
-After review only, example tuning run (20 total trials, not 20 additional on resume):
-```cmd
-python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-01 --holdout-start 2025-01-01 --holdout-end 2026-01-01 --train-days 180 --test-days 30 --threads 2 --seed 42 --model ridge --trials 20
-python report_engine.py optimization
-```
-Bundles under data/reports: 01_data_quality.zip, 02_feature_label.zip, 03_predictive_benchmark.zip, 04_optimization.zip. Benchmark separately data/metadata/compute_benchmark.json. Feature report covers development only; experiment bundles include all matching completed experiments, not an isolated run. No full backtest/holdout command yet. No verified listing/calendar, OOS prediction export, full ablation, or portfolio report yet.
+Send data/reports/05_robustness.zip. This is a 20-feature comparison using existing train-fold median imputation; not a test isolating imputation. Do not rerun completed experiments solely to change the code hash.
+
+## Remaining gates (supersede older proposed tuning order)
+
+1. Integrity/reproducibility: verify local/remote code, regression tests for ablation mask and alternate labels; partition coverage, finite core features, full timestamp/label continuity, grouped as-of order, feature availability and no leakage. Validate prediction export/checkpoint consistency; preserve prior artifacts. Audit funding boundary/sign and raw-price execution, distinguish missing from stale, no synthetic candles or labels. Recheck revised-delay predictive scores from individual predictions where possible.
+2. Missingness experiments: compare technical control and reduced derivatives on identical samples plus full operational coverage. Median as comparator, complete-case, bounded causal carry/rolling median for appropriate state features, native missing handling where supported, technical fallback; use explicit missing flags and all-empty-column policy. No blanket imputations; no stale filling of multi-month outages. Reconstruct taker ratio only if definitions match. Document publication lag sensitivity. Select using development folds, not holdout.
+3. Economic validation: complete trade ledger and mark-to-market portfolio accounting, fee schedule/latency/size stress, naive and rule-based trading comparators, annual/regime and conditional direction/calibration diagnostics. Keep fixed notional screening distinct from portfolio return.
+4. Feature and target research: fold-local redundant-feature selection, normalized OI/funding/basis/flow, causal regime and multi-timeframe context; return, directional and cost-aware/barrier targets, timeout and same-minute ambiguity; MAE/MFE and exit study. Test hypotheses from uploaded papers rather than assume performance transfers.
+5. Cross-asset: repair incomplete instruments, verify listing/calendar and delisted cohorts; shared chronological splits; relative returns, cross-sectional ranking/ProSP and portfolio exposure controls. Evaluate pairs, rule-based technical and macro/news/microstructure branches according to source evidence and data availability. BTC is infrastructure pilot, not a requirement that all research be single-asset.
+6. Nested selection and robustness: bounded train-window/threshold/regularization/Optuna studies; parameter plateau only with meaningful neighborhoods, validate on next untouched development slice. Use suitable multiple-testing correction with aligned return series and logged search universe; report negative results. Do not tune just to improve Brier/MSE or maximize reused development P&L.
+7. Freeze candidate, use genuinely untouched evaluation or explicitly disclose historical exposure; final cost-aware OOS and forward paper trading. No automatic execution or guaranteed profitability.
+
+## Paper-based research handover
+
+Review full uploaded papers and exact methods before implementing any new experiment. Maintain a paper registry with DOI, market/exchange, sample period, frequency, features, target, validation, execution/cost assumptions, findings, limitations, replication plan and accept/drop decision. Distinguish original findings from adaptations. Earlier reading includes Lin et al. parameter plateau, Jaquart et al. forecasting/trading, Arain & Snudden conditional directional accuracy, Zhang et al. ProSP, Deprez & Frommel technical rules, Cakici et al. cross-sectional ML, Easley et al. microstructure, Albers et al. latency, and crypto pairs/cascade papers. The exact accepted paper inventory must be reconciled with the uploaded full texts; do not assume the list is exhaustive or that papers demonstrate a current Binance futures edge.
