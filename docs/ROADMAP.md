@@ -163,3 +163,17 @@ python baseline_engine.py --symbols BTCUSDT --tf 1h --horizon 4 --start 2021-01-
 python robustness_engine.py
 ```
 Upload data/reports/05_robustness.zip. Preserve prior experiments.
+
+## Checkpoint — derivatives V1 diagnosis closed
+Source: 05_robustness(3).zip. At threshold .70, fee 5/slippage 1 bps per side plus funding: bounded-state 0442bc85, 451 trades, expectancy +0.0008047%, PF 1.001409, fixed-notional P&L +0.362919%, DD 34.9243%; extra lag 5m d8ee2e9d, 512 trades, expectancy -0.0390005%, PF .927196, P&L -19.9683%; 15m 6e80ff13, 405 trades, expectancy -0.0182728%, PF .966689, P&L -7.40049%; 60m 328f3cf1, 431 trades, expectancy -0.0380415%, PF .931807, P&L -16.3959%. All nominal 7/30 day bootstrap intervals cross zero. Unknown funding exclusions 5/6/4/4 respectively. Park raw derivatives V1; no more imputation/lag tuning on this configuration. Reopen normalized derivatives only under distinct hypothesis. Lag exporter and baseline commits 1fe30bf, ce86a2a.
+
+Next: portfolio_engine.py (da65ba3), incumbent technical 6823506d, 104 trades, threshold .70, primary fixed-notional P&L reconciliation, minute-open mark-to-market equity and daily Sharpe, fixed equity fractions 25/50/100% (sensitivity, not sizing optimization), three fee/slippage scenarios, cash benchmark. Fail on missing intratrade marks or funding; preserve all caches. Funding settlement mark is proxy; no liquidation, margin tiers, intra-minute extremes, or historical fee schedule. Runtime/test acceptance pending. No new model fit or holdout.
+
+```cmd
+git pull origin main
+python -m pytest -q
+python portfolio_engine.py
+```
+Upload data/reports/10_portfolio.zip even if fail.
+
+Research decision log alignment: incumbent is a benchmark, not exclusive winner. After economic accounting and conditional DA/calibration diagnostics, open controlled candidate branches: technical rules, feature V2, alternative targets/triple barrier, multi-asset and cross-sectional/ProSP, other evidence-driven hypotheses. Read relevant full-text papers before each substantive branch. Only screen-positive candidates enter bounded nested tuning; record search universe and stop rules before runs. Do not use holdout for selection. Separate active/parked/completed/failed branches. No required return target or fixed number of tuning steps. User requests compact execution instructions; retain detailed findings in roadmap.
