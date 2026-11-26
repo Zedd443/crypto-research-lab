@@ -37,12 +37,31 @@ def main():
             if len(names)!=1:raise ValueError("Unexpected archive members")
             rows=[row for row in csv.reader(io.StringIO(z.read(names[0]).decode("utf-8-sig"))) if row and row[0].isdigit() and int(row[0]) in ts]
         f=de.clean(de.parse_rows(rows),min(ts),max(ts)+MIN).select(pl.col("open_time").alias("event_time"),"open")
+        # Daily archive can be incomplete even when HTTP succeeds.
+        extra=ts-set(f["event_time"].to_list())
+        rest_meta=[]
+        if extra:
+            api="https://fapi.binance.com/fapi/v1/markPriceKlines"
+            for t in sorted(extra):
+                params={"symbol":"BTCUSDT","interval":"1m","startTime":t,"endTime":t+MIN-1,"limit":1}
+                try:
+                    resp=de.SESSION.get(api,params=params,timeout=30)
+                    resp.raise_for_status()
+                    payload=resp.json()
+                    rows=[row for row in payload if isinstance(row,list) and int(row[0])==t]
+                    rest_meta.append({"timestamp":t,"url":resp.url,"response_sha256":hashlib.sha256(resp.content).hexdigest(),"rows":rows})
+                    if rows:
+                        y=de.clean(de.parse_rows(rows),t,t+MIN).select(pl.col("open_time").alias("event_time"),"open").cast(f.schema)
+                        f=pl.concat([f,y])
+                except Exception as exc:
+                    print(t,"REST unavailable:",str(exc),flush=True)
+            de.write_json(OUT/(stamp+".rest.json"),rest_meta)
         if path.exists() and meta.exists():
             m=json.loads(meta.read_text())
             if hashlib.sha256(path.read_bytes()).hexdigest()!=m["overlay_sha256"]:raise ValueError("Existing overlay hash mismatch")
             f=pl.concat([pl.read_parquet(path),f]).unique().sort("event_time")
             if f["event_time"].n_unique()!=f.height:raise ValueError("Conflicting repair")
         de.atomic_write(f,path)
-        de.write_json(meta,{"url":url,"archive_sha256":sha,"overlay_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"rows":f.height})
+        de.write_json(meta,{"url":url,"archive_sha256":sha,"overlay_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"rows":f.height,"rest_attempts":rest_meta})
         print(stamp,len(ts.intersection(f["event_time"].to_list())),"/",len(ts),flush=True)
 if __name__=="__main__":main()
