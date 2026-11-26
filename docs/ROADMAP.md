@@ -245,3 +245,12 @@ git pull origin main
 python market_regime_engine.py
 ```
 Upload data/reports/17_market_regime.zip.
+
+## Checkpoint — market regime V2 PASS, secondary candidate
+Source 17_market_regime.zip, experiment 3c6aaa8583ead14b4921940585a01b34f475beb8395a25499f5ed07e54f751f1. Common OOS eligibility verified by engine. 35,064 feature rows, missing 168/24/168/23/167. Market regime: DA 53.4601%, Brier .249942292 vs naive .249941121; 203 trades, expectancy +.2413906%, PF 1.487961, fixed-notional P&L +49.002282%, DD 9.058472%, WR 54.1872%. Nominal 7d CI [.020137%,.471298%], 30d [.019219%,.486612%]. Stress: expectancy +.0611737%, P&L +12.418258%, PF 1.104423, DD 12.096697%; both CIs cross zero. Incumbent superior economically. Retain secondary candidate for later controlled comparison, no tuning. Next liquidity_engine.py (5282ca3): five predeclared liquidity proxies: ratio of 24h/168h mean absolute log return per quote volume (Amihud-style adaptation), quote volume and trade count ratios of 24h/168h means, signed taker quote flow / total quote volume over 4h and 24h. Same incumbent folds, labels, base features, threshold, costs, seed and hyperparameters; gap-aware completed OHLCV; no order-book or actual market impact claim. Some redundancy with base flow/volume features is possible; test incremental contribution. Literature mapping pending, exploratory not exact replication. Runtime pending; no holdout or tuning.
+
+```cmd
+git pull origin main
+python liquidity_engine.py
+```
+Upload data/reports/18_liquidity.zip.
