@@ -48,6 +48,19 @@ def main_audit(out):
         require(np.all(np.isnan(px[ix])),"Cross-partition duplicate marks")
         px[ix]=v
         sources[str(p)]=hashlib.sha256(p.read_bytes()).hexdigest()
+    # Daily recovery overlay may fill missing or invalid marks only.
+    for p in sorted((ROOT/"channel_mark_repairs"/"BTCUSDT").glob("*.parquet")):
+        meta=json.loads(p.with_suffix(".json").read_text())
+        sha=hashlib.sha256(p.read_bytes()).hexdigest()
+        require(sha==meta["overlay_sha256"],"Channel repair hash mismatch")
+        x=pl.read_parquet(p).filter(pl.col("event_time").is_between(int(e[0]),int(z[-1]),closed="left"))
+        ts=x["event_time"].to_numpy();v=x["open"].to_numpy()
+        require(np.all(ts%MIN==0) and len(np.unique(ts))==len(ts) and np.all(np.isfinite(v)&(v>0)),"Invalid recovered marks")
+        ix=(ts-e[0])//MIN
+        known=np.isfinite(px[ix])&(px[ix]>0)
+        require(np.all(px[ix[known]]==v[known]),"Recovery conflicts with existing mark")
+        px[ix[~known]]=v[~known]
+        sources[str(p)]=sha
     bad=active&(~np.isfinite(px)|(px<=0))
     holes=grid[bad]
     out.update({"audit_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"mark_sources":sources,"expected_minutes":int(active.sum()),"missing_or_invalid_minutes":len(holes),"gap_ranges":[],"scenarios":[]})
