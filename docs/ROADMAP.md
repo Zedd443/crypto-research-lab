@@ -281,3 +281,12 @@ git pull origin main
 python cost_aware_target_engine.py
 ```
 Upload data/reports/21_cost_aware_target.zip.
+
+## Checkpoint — cost-aware target PASS, retain
+Source 21_cost_aware_target.zip: 63 trades, expectancy +0.6908%, PF 2.802, fixed-notional P&L +43.52%, DD 4.75%, WR 60.32%; stress expectancy +0.5099%. Nominal bootstrap intervals positive under both cost scenarios. Multiclass Brier marginally better than class-prior baseline. Retain alongside binary incumbent, not a replacement. Next triple_barrier_engine.py (e253532): symmetric log-price barriers max(0.0012, 2 times past hourly volatility20), checked on completed minute closes, exit next minute open or at 4h maximum. This is a closed-bar adaptation rather than intrabar TP/SL execution; no assumed fill at barrier price or ambiguous intrabar ordering. Cost-aware classes based on realized net return at actual exit. Preserve fixed-horizon fold eligibility and conservative purge (actual exit also checked), same feature set and threshold .70; compare original incumbent, exit-only incumbent with barriers, and retrained three-class target. Validate raw minute path continuity and original endpoints, cache labels and predictions, no tuning or holdout. Exploratory parameters chosen in advance, not optimized; literature replication and runtime unverified.
+
+```cmd
+git pull origin main
+python triple_barrier_engine.py
+``
+Upload data/reports/22_triple_barrier.zip regardless of status.
