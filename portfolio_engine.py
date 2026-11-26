@@ -22,7 +22,16 @@ def mark_window(e,z):
     paths=[ROOT/"mark"/"BTCUSDT"/(m+".parquet") for m in sorted(months)]
     if not all(p.exists() for p in paths):
         return None,[str(p) for p in paths if not p.exists()]
-    return pl.scan_parquet(paths).filter(pl.col("event_time").is_between(e,z,closed="left")).select("event_time","open").collect().sort("event_time"),[]
+    x=pl.scan_parquet(paths).filter(pl.col("event_time").is_between(e,z,closed="left")).select("event_time","open").collect()
+    for month in sorted(months):
+        p=ROOT/"mark_repairs"/"BTCUSDT"/(month+".parquet")
+        if p.exists():
+            meta=json.loads(p.with_suffix(".json").read_text())
+            require(hashlib.sha256(p.read_bytes()).hexdigest()==meta["overlay_sha256"],"Repair hash mismatch")
+            overlay=pl.read_parquet(p).filter(pl.col("event_time").is_between(e,z,closed="left")).cast(x.schema)
+            require(not overlay.join(x,on="event_time",how="inner").height,"Repair overlaps original mark")
+            x=pl.concat([x,overlay])
+    return x.sort("event_time"),[]
 
 def mark_audit(trades):
     issues=[]; expected_total=0; valid_total=0
@@ -46,10 +55,8 @@ def replay(trades,marks,fraction,first,last,fee):
     equity=1.; peak=1.; dd=0.; equity_daily={}; curve=[]; records=[]
     for t in trades.iter_rows(named=True):
         e=int(t["entry_time"]); z=int(t["label_end"]); side=t["side"]
-        month=datetime.fromtimestamp(e/1000,timezone.utc).strftime("%Y-%m")
-        endmonth=datetime.fromtimestamp(z/1000,timezone.utc).strftime("%Y-%m")
-        paths=[ROOT/"mark"/"BTCUSDT"/(m+".parquet") for m in sorted({month,endmonth})]
-        x=pl.scan_parquet(paths).filter(pl.col("event_time").is_between(e,z,closed="left")).select("event_time","open").collect().sort("event_time")
+        x,absent=mark_window(e,z)
+        require(x is not None and not absent,"Missing mark partition")
         ts=x["event_time"].to_numpy(); px=x["open"].to_numpy()
         require(np.array_equal(ts,np.arange(e,z,MIN)),"Missing intratrade mark minute")
         require(np.all(np.isfinite(px)&(px>0)),"Invalid mark price")
