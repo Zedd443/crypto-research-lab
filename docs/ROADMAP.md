@@ -365,3 +365,12 @@ git pull origin main
 python prosp_original_features_engine.py
 ```
 Upload data/reports/30_prosp_features.zip.
+
+## Checkpoint — ProSP original-feature adaptation PASS; eliminate tested configurations from tuning
+Source 30_prosp_features.zip: all six runs pass. In order 4h Set1_10, Set1_9, Set3_9, 8h Set1_10, Set1_9, Set3_9: gross expectancy (%) .02120/.01190/.00091/.01129/.02402/.03907; standard fee/slippage expectancy (%) -.08162/-.09586/-.10745/-.09629/-.08651/-.07237; PF .702/.650/.621/.762/.773/.806. Best 8h Set3_9 gross nominal bootstrap intervals positive but at 1bp per side intervals cross zero. All standard-cost negative before funding. No additional tuning budget for tested ProSP adaptations, not a rejection of the original paper. Next p1dr_daily_engine.py (64f79c2): Liu et al. (2023), DOI 10.1016/j.ribaf.2023.101905, daily lagged return reversal hypothesis, ten survivor futures assets, UTC daily 24h lookback and 24h holding, 15m delay, existing purged development evaluation windows, top/bottom two equal-weight legs, momentum sign control, scheduled IC and gross/standard/stress fee-slippage economics. No training, funding yet, tuning or holdout. Smaller universe and different market from original study; runtime unverified. If negative, eliminate tested daily ranking configuration and proceed pairs trading.
+
+```cmd
+git pull origin main
+python p1dr_daily_engine.py
+```
+Upload data/reports/31_p1dr_daily.zip.
