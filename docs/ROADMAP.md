@@ -188,3 +188,12 @@ git pull origin main
 python conditional_da_engine.py
 ```
 Upload data/reports/11_conditional_da.zip.
+
+## Checkpoint — candidate expansion: technical rules V1
+Conditional DA diagnostics completed (11_conditional_da.zip); higher confidence does not guarantee monotonic economic expectancy. Incumbent 6823506d remains fixed; no threshold optimization. Technical rules V1 (95628e2): 16 fixed configurations (3 SMA, 4 simple rolling RSI, 3 channel breakouts, 6 momentum), plus incumbent and always-long/short controls. Same eligible decision keys, 15m delay, 4h holding, nonoverlap, funding and primary/stressed costs. This is an exploratory adaptation inspired by Deprez & Frömmel, not replication of all six rule classes or their native exit/portfolio selection. No Optuna, no holdout. Report fixed-notional economics and nominal bootstrap; retain all configurations including negative. Advance only plausible positive candidates to native-exit/portfolio evaluation, rather than expand grid automatically. Runtime pending. Conditional DA detailed metrics not yet transcribed here.
+
+```cmd
+git pull origin main
+python technical_rule_engine.py
+```
+Upload data/reports/12_technical_rules.zip.
