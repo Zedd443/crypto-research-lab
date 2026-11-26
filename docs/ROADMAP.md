@@ -215,3 +215,12 @@ git pull origin main
 python channel_audit_engine.py
 ```
 Upload data/reports/14_channel_audit.zip regardless of status.
+
+## Checkpoint — Channel100 independent execution and funding PASS
+Source 14_channel_audit(1).zip: 127 trades, no missing hourly decisions, warmup or execution endpoints; all 24 missing BTC funding marks recovered (21 affected four original trades), no excluded trades. Recovery commits 8aa1f2c/9f3a714. Exposure 99.6089% on channel audit window. Primary 5/1 bps: expectancy 1.324837%, PF 1.508962, fixed-notional P&L 168.25434%, DD 40.50147%, WR 37.7953%; annual fixed-notional P&L 2021 +46.44557%, 2022 -8.47173%, 2023 +76.10405%, 2024 +54.17645%. Nominal block CI 7d [-0.38193%,3.25076%], 30d [-0.30123%,3.28184%]. Stressed 10/5: P&L +145.19776%, expectancy 1.143289%, PF 1.420998, DD 42.49349%; both intervals cross zero. Source hash 96128d59834b0d4b8e336f121b69706c58adaad086a566785605cd142c0e40e8. Funding marks remain minute-open proxies. Channel is challenger, not validated winner; Logistic has much lower exposure. Next channel_portfolio_engine.py (3e744ad): audited ledger, monthly bounded scans, common incumbent manifest calendar, primary/stress costs and 25/50/100% fixed notional fractions, complete minute-mark coverage required. Report gaps without dropping trades, no liquidation model or intraminute extrema, no sizing tuning. Runtime pending. No holdout.
+
+```cmd
+git pull origin main
+python channel_portfolio_engine.py
+```
+Upload data/reports/15_channel_portfolio.zip regardless of status. After portfolio accounting, park or retain challenger and proceed to Feature V2 rather than tune immediately.
