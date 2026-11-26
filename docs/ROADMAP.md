@@ -374,3 +374,17 @@ git pull origin main
 python p1dr_daily_engine.py
 ```
 Upload data/reports/31_p1dr_daily.zip.
+
+## Checkpoint — daily P1DR PASS; eliminate tested ranking configurations
+Source 31_p1dr_daily.zip (previous conversation report): 1,218 baskets each; momentum/reversal Spearman IC -/+ .01743, gross expectancy -/+ .03027%, standard fee/slippage expectancy -.15030%/-.08975%, PF .775/.858. Gross reversal CI crosses zero; standard-cost CI negative. Funding not included. Eliminate tested 4h and 24h ranking configurations from tuning, not the original Liu hypothesis. Candidate registry unchanged C01–C06.
+
+## Data integrity clarification and pairs pilot
+Repository universe.py defines 37 instruments: 30 crypto plus 7 TradFi. Ten crypto passed strict full-window 2021–2024 readiness, not a complete point-in-time universe. Twenty other crypto include later listings, delistings and incomplete caches; nine unresolved repair errors were recorded in earlier acquisition audit. Do not equate missing historical coverage with actual outages. BTC integrity, funding and mark repairs passed scoped audits, not certification of all datasets. Before final candidate selection, complete listing/delisting-aware coverage and targeted repair audit, verify raw archive provenance and publication assumptions, and re-evaluate universe-dependent conclusions if coverage changes materially. Preserve immutable raw data and existing checkpoints.
+Next cointegration_engine.py (1e40c3c): nine BTC-reference pairs, completed hourly futures price levels, training-only Engle–Granger with intercept, ADF levels/differences, Holm correction across nine pairs within each fold, positive hedge ratio and AR1 half-life diagnostic. Existing 42 rolling 180d training windows; no test fitting, no holdout, no backtest. ADF non-rejection is not proof of I(1); within-fold Holm does not correct all research trials. Exploratory adaptation of Tadi & Witzany, DOI 10.1186/s40854-024-00702-7; not exact replication. Runtime unverified. Install statsmodels if required; cached fold results. Next causal spread trading benchmark before copula complexity.
+
+```cmd
+git pull origin main
+python -m pip install statsmodels
+python cointegration_engine.py
+```
+Upload data/reports/32_cointegration.zip.
