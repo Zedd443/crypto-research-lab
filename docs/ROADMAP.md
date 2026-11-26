@@ -335,3 +335,12 @@ git pull origin main
 python cross_sectional_engine.py
 ``
 Upload data/reports/27_cross_sectional.zip.
+
+## Checkpoint — cross-sectional V1 PASS, park
+Source 27_cross_sectional.zip: 30,071 balanced hourly cross sections, 7,518 scheduled baskets; logistic/momentum/reversal IC .0177675/-.0249181/.0249181, primary expectancy (%) -.1124488/-.1126950/-.1273388, PF .591517/.629519/.586825. Nominal bootstrap intervals entirely negative; stress expectancy (%) -.292482/-.292727/-.307370. All fee/slippage-only. Park tested configurations. Literature: Zhang, Ji, Ma & Cao (2026), Probability-based portfolio in crypto-perpetual futures market, DOI 10.1016/j.physa.2026.131911, local full-text PDF S0378437126006473. Algorithm 1 and Section 5 use three relative-return classes, dual 25% tail probability sorting, remove intersections; monotonicity derived under location-scale assumptions, not unconditional across heterogeneous volatilities. Sections 6.4 and Conclusion report 8h XGB-ProSP annualized net return 44.32% at 1 bp per side, but all tested strategies unprofitable at 5 bps per side; gross results not sufficient for our 5+1 bps assumptions. Adapt rather than replicate: prosp_engine.py (c96b76a), pooled multinomial logistic on existing technical features and same 42 purged folds, fixed ten-asset balanced panel, two assets per realized tail and per candidate leg, dual-sort overlap removal versus single-score p_top-p_bottom comparator. Fixed 4h horizon and schedule, 15m delay; equal gross notional one on surviving baskets, cash on empty baskets. Report gross, 1bp, 5+1 and 10+5 bps per side; funding not yet included. This differs from paper's larger changing universe, feature sets, model architectures and 4h/8h protocols. No tuning/holdout. Runtime unverified. If economically negative, park tested adaptation rather than escalating model complexity automatically. If promising, audit funding and turnover before any model expansion.
+
+```cmd
+git pull origin main
+python prosp_engine.py
+```
+Upload data/reports/28_prosp.zip.
