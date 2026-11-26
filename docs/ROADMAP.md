@@ -317,3 +317,12 @@ git pull origin main
 python multi_asset_transfer_engine.py
 ```
 Upload data/reports/25_multi_asset_transfer.zip.
+
+## Checkpoint — multi-asset transfer PASS
+Source 25_multi_asset_transfer.zip: all 9 alternative symbols completed 42 folds with frozen BTC specification. Fee/slippage-only primary expectancy (%): BTC .553738, BNB .612890, ETH .374393, ATOM .253648, AVAX .187527, UNI .123457, ADA -.236281, DOGE -.250194, BCH -.473737, LINK -.545440. Stress fixed-notional P&L (%): BTC 38.8171, BNB 43.6337, ETH 15.1339, ATOM 7.5370, AVAX .5387, UNI -4.5405, ADA -37.9160, DOGE -79.1279, BCH -129.6206, LINK -45.6710. All altcoin nominal bootstrap intervals cross zero at both costs. Only DOGE marginally improves Brier against its naive baseline, despite negative economic performance. BNB primary P&L +61.9019%, fixed-notional DD 30.9787%; 2024 contributes +56.7847 percentage points. BTC retains incumbent; BNB/ETH exploratory candidates, no generalization claim. Negative results retained. Next multi_asset_funding_engine.py (545c2d3): rescore all five primary-positive altcoins with no retraining or parameter changes. Strict 8h funding schedule gate as initial check, report any nonstandard intervals for separate historical verification, do not silently assume 8h or fill missing events. Missing settlement marks affecting trades block net scoring pending targeted repair. Minute-open mark proxy, fixed-notional not compounded portfolio, no holdout. Runtime unverified; listing history remains unverified. Conditional on selected full-window universe and positive-primary screening; no multiple-testing adjustment.
+
+```cmd
+git pull origin main
+python multi_asset_funding_engine.py
+```
+Upload data/reports/26_multi_asset_funding.zip regardless of status.
