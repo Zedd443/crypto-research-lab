@@ -431,7 +431,7 @@ def calibration():
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce","predictive-diagnostics","calibration"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce","predictive-diagnostics","calibration","batch"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -441,6 +441,13 @@ def main():
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
+    if args.command=="batch":
+        if args.root!=Path("data"):p.error("Batch currently uses default data root")
+        import subprocess,sys
+        from research_engine import ASSETS
+        symbols=ASSETS if args.symbols==SYMBOLS else list(dict.fromkeys(args.symbols))
+        if not set(symbols).issubset(ASSETS):p.error("Batch readiness pilot supports "+", ".join(ASSETS))
+        raise SystemExit(subprocess.call([sys.executable,"research_engine.py","--symbols",*symbols],env={**os.environ,"POLARS_MAX_THREADS":"1"}))
     if args.command=="calibration":
         if args.root!=Path("data"):p.error("Calibration uses default data root")
         return calibration()
