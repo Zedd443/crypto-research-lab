@@ -84,7 +84,13 @@ def costs(entry,end,ep,xp,side,funding,fee,slip):
     r=side*(v-u)/u-fee/10000*(u+v)/u-side*(cum[b]-cum[a])/u
     return np.where(bad[b]==bad[a],r,np.nan)
 
-def build(symbol,raw,funding):
+def base_arrays(symbol,raw,cache):
+    """Immutable source-keyed feature/price cache, reused on restart."""
+    cache.mkdir(parents=True,exist_ok=True)
+    path=cache/"base.npz";meta=cache/"base.json"
+    if path.exists() and meta.exists() and json.loads(meta.read_text()).get("sha256")==digest([path]):
+        with np.load(path,allow_pickle=False) as z:
+            return {k:z[k] for k in z.files}
     bars={tf:[] for tf in TFS};prices=[];cursor=A
     for p in raw:
         f=pl.read_parquet(p).sort("open_time")
@@ -96,16 +102,30 @@ def build(symbol,raw,funding):
         prices.append(v)
         for tf in TFS:bars[tf].append(aggregate(f,tf))
     require(cursor==B,"Incomplete raw development grid "+symbol)
-    prices=np.concatenate(prices)
+    arrays={"prices":np.concatenate(prices)}
+    for tf,step in TFS.items():
+        h=technical(pl.concat(bars[tf]).sort("open_time"),step)
+        h=h.filter(pl.all_horizontal([pl.col(c).is_finite().fill_null(False) for c in BASE_FEATURES]))
+        h=h.filter(pl.col("decision_time")+15*MIN+max(HORIZONS)*H<B)
+        arrays[tf+"_d"]=h["decision_time"].to_numpy()
+        arrays[tf+"_x"]=h.select(COLS).to_numpy()
+    tmp=path.with_suffix(".tmp")
+    with tmp.open("wb") as f:np.savez(f,**arrays)
+    tmp.replace(path)
+    from data_engine import write_json
+    write_json(meta,{"sha256":digest([path])})
+    return arrays
+
+def build(symbol,raw,funding,cache):
+    arrays=base_arrays(symbol,raw,cache);prices=arrays["prices"]
+    require(len(prices)==(B-A)//MIN,"Invalid cached price grid")
     def px(t):
         require(np.all(t>=A)&np.all(t<B)&np.all((t-A)%MIN==0),"Execution outside raw grid")
         return prices[(t-A)//MIN]
     datasets={}
     for tf,step in TFS.items():
-        h=technical(pl.concat(bars[tf]).sort("open_time"),step)
-        h=h.filter(pl.all_horizontal([pl.col(c).is_finite().fill_null(False) for c in BASE_FEATURES]))
-        h=h.filter(pl.col("decision_time")+15*MIN+max(HORIZONS)*H<B)
-        d=h["decision_time"].to_numpy();e=d+15*MIN;x=h.select(COLS).to_numpy()
+        d=arrays[tf+"_d"];e=d+15*MIN;x=arrays[tf+"_x"]
+        require(len(d)==len(x) and np.isfinite(x).all() and np.all(np.diff(d)>0),"Invalid cached features")
         ep=px(e)
         for horizon in HORIZONS:
             z=e+horizon*H;xp=px(z);mid=e+horizon*H//2
@@ -337,7 +357,9 @@ def run(assets):
                     row["identity"]=identity(key)
                     funding=load_funding(symbol)
                     row["unknown_funding_events"]=int(funding[3][-1])
-                    ds=build(symbol,raw,funding)
+                    cache_id=identity({"raw":digest(raw),"builder":digest([Path("research_engine.py"),Path("feature_engine.py"),Path("data_engine.py")]),"polars":pl.__version__,"numpy":np.__version__,"TFS":TFS,"features":COLS,"horizons":HORIZONS})
+                    completed=root/"folds"/row["identity"]
+                    ds=None if all((completed/(str(f.fold_id)+".json")).exists() for f in folds) else build(symbol,raw,funding,root/"datasets"/cache_id)
                     signals=[]
                     for fold in folds:
                         result=checkpoint(root/"folds",key,fold.fold_id,lambda:search_fold(symbol,ds,fold))
@@ -350,6 +372,8 @@ def run(assets):
                     del ds
                 except Exception:
                     row.update(status="fail",error=traceback.format_exc());print(symbol,"blocked",flush=True)
+                finally:
+                    ds=None
             require(funds,"No asset completed")
             out["assets_completed"]=list(funds)
             for name,signals in [("frozen_binary",baseline),("nested_joint_search",all_signals)]:
