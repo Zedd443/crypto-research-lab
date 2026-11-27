@@ -148,7 +148,7 @@ def run_symbol(task):
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -168,6 +168,7 @@ def main():
         "repair-channel-marks": ["channel_mark_repair_engine.py"],
         "candidate-portfolio": ["portfolio_engine.py","--candidate","compare"],
         "time-exit": ["portfolio_engine.py","--candidate","exit"],
+        "early-invalidation": ["portfolio_engine.py","--candidate","invalidation"],
     }
     if args.command in commands:
         if args.command!="coverage" and args.root!=Path("data"):
