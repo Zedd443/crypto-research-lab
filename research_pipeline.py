@@ -292,9 +292,74 @@ def reproduce():
     tmp.replace(p);print(p,out["status"])
     if out["status"]!="pass":raise SystemExit(out.get("error","Prediction discrepancy"))
 
+def predictive_diagnostics():
+    """Frozen OOS reliability and conditional skill; no fitted calibration."""
+    import zipfile,traceback,hashlib
+    import numpy as np
+    from robustness_engine import A,B,ledger
+    from funding_repair_engine import apply
+    from execution_engine import score_trades
+    from cost_aware_target_engine import KEYS
+    from experiment_store import identity
+    root=Path("data")
+    out={"scope":"Descriptive frozen development OOS diagnostics; overlapping hypothetical signals are not independent trades; no threshold selection or calibration fitting","results":[]}
+    def check(ok,msg):
+        if not ok:raise ValueError(msg)
+    def read(n):
+        with zipfile.ZipFile(root/"reports"/n) as z:return json.loads(z.read("metrics.json"))
+    try:
+        gate=read("45_reproducibility.zip");rep=read("21_cost_aware_target.zip")
+        check(gate["status"]==rep["status"]=="pass" and len(gate["folds"])==42,"Prior gate failed")
+        folder,=list((root/"experiments").glob("6823506d*"))
+        spec=json.loads((folder/"spec.json").read_text());man=json.loads((folder/"manifest.json").read_text())
+        check(identity(spec)==folder.name and spec["manifest_id"]==man["manifest_id"],"Identity mismatch")
+        paths=sorted((folder/"predictions").glob("*.parquet"))
+        other=sorted((root/"target_v2"/rep["experiment"]).glob("*.parquet"))
+        check({p.stem for p in paths}=={p.stem for p in other}=={str(f["fold_id"]) for f in man["folds"]},"Incomplete folds")
+        old=pl.read_parquet(paths).sort("decision_time")
+        new=pl.read_parquet(other).sort("decision_time")
+        check(old.select(KEYS).equals(new.select(KEYS)) and old["decision_time"].n_unique()==old.height and old["decision_time"].min()>=A and old["label_end"].max()<B,"Scope mismatch")
+        fund=apply(ledger(root)).sort("event_time")
+        check(hashlib.sha256(fund.write_csv().encode()).hexdigest()==rep["funding_hash"],"Funding hash mismatch")
+        out["prediction_hashes"]={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths+other}
+        for name,f in [("C01",old),("C02",new)]:
+            y=(f["target_return"].to_numpy()>0).astype(int)
+            if name=="C01":
+                p=f["prediction"].to_numpy();prior=f["baseline_prediction"].to_numpy()
+                probs=np.column_stack([1-p,p]);base=np.column_stack([1-prior,prior])
+                actual=y;classes=[-1,1]
+            else:
+                probs=f.select("p_short","p_flat","p_long").to_numpy()
+                base=f.select("prior_short","prior_flat","prior_long").to_numpy()
+                actual=f["cost_target"].to_numpy()+1;classes=[-1,0,1]
+            check(np.isfinite(probs).all() and (probs>=0).all() and np.allclose(probs.sum(1),1),"Invalid probabilities")
+            one=np.eye(len(classes))[actual]
+            row={"candidate":name,"rows":f.height,"brier_multiclass_sum":float(np.mean(np.sum((probs-one)**2,axis=1))),"prior_brier_multiclass_sum":float(np.mean(np.sum((base-one)**2,axis=1))),"reliability":[],"conditional":[]}
+            for j,c in enumerate(classes):
+                for i in range(10):
+                    mask=(probs[:,j]>=i/10)&((probs[:,j]<(i+1)/10) if i<9 else (probs[:,j]<=1))
+                    if mask.any():row["reliability"].append({"class":c,"lower":i/10,"upper":(i+1)/10,"n":int(mask.sum()),"mean_probability":float(probs[mask,j].mean()),"observed_frequency":float(one[mask,j].mean())})
+                if c==0:continue
+                # Prespecified threshold only, distinguish signal opportunity from executed trades.
+                mask=probs[:,j]>=.7
+                if not mask.any():continue
+                trades=f.filter(pl.Series("eligible",mask)).select(KEYS).with_columns(pl.lit(c).alias("side"))
+                scored=score_trades(trades,5,1,fund,{"BTCUSDT":[(A,B)]})
+                check(scored.height==trades.height,"Scoring changed coverage")
+                row["conditional"].append({"side":c,"threshold":.7,"signals":int(mask.sum()),"mean_probability":float(probs[mask,j].mean()),"target_hit_rate":float(one[mask,j].mean()),"direction_hit_rate":float((c*f["target_return"].to_numpy()[mask]>0).mean()),"net_win_rate":float((scored["net_return"]>0).mean()),"net_expectancy":float(scored["net_return"].mean()),"prior_class_frequency":float(base[mask,j].mean())})
+            out["results"].append(row)
+            print(name,"done",flush=True)
+        out["status"]="pass"
+    except Exception:out.update(status="fail",error=traceback.format_exc())
+    p=root/"reports"/"46_predictive_diagnostics.zip";p.parent.mkdir(parents=True,exist_ok=True)
+    tmp=p.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
+    tmp.replace(p);print(p,out["status"])
+    if out["status"]!="pass":raise SystemExit(out["error"])
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce","predictive-diagnostics"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -304,6 +369,9 @@ def main():
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
+    if args.command=="predictive-diagnostics":
+        if args.root!=Path("data"):p.error("Diagnostics uses default data root")
+        return predictive_diagnostics()
     if args.command=="reproduce":
         if args.root!=Path("data"):p.error("Reproduce uses default data root")
         return reproduce()
