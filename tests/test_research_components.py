@@ -170,3 +170,41 @@ def test_batch_matched_direction_control():
     result=edge_stats(rows,"standard",A,A+DAY)
     assert result["expectancy"]==pytest.approx(.02)
     assert result["matched_direction_comparator"]["chosen_minus_equal_random_direction_expectancy"]==pytest.approx(.02)
+
+
+def test_transfer_retains_unknown_price_and_funding():
+    import numpy as np
+    import research_engine as r
+    f=pl.DataFrame({"symbol":["X","X"],"decision_time":[r.A,r.A+r.H],
+                    "entry_time":[r.A+15*r.MIN,r.A+r.H+15*r.MIN],
+                    "label_end":[r.A+4*r.H+15*r.MIN,r.A+5*r.H+15*r.MIN],
+                    "entry_price":[100.,100.],"exit_price":[None,101.]})
+    rows=r.transfer_extract(f,np.array([.8,.8]),0)
+    assert len(rows)==2
+    r.transfer_score(rows,None,[])
+    assert rows[0]["outcome_status"]=="unknown_price"
+    assert rows[0]["fee_slip_standard"] is None
+    assert rows[1]["outcome_status"]=="unverified_funding_schedule"
+    assert rows[1]["standard"] is None and rows[1]["fee_slip_standard"]>0
+
+def test_transfer_local_funding_spans_do_not_bridge_gap(tmp_path,monkeypatch):
+    import research_engine as r
+    monkeypatch.setattr(r,"ROOT",tmp_path)
+    ts=[r.A,r.A+8*r.H,r.A+24*r.H,r.A+32*r.H]
+    p=tmp_path/"funding"/"X"/"2021-01.parquet"
+    p.parent.mkdir(parents=True)
+    pl.DataFrame({"event_time":ts,"funding_rate":[.001]*4,
+                  "funding_interval_hours":[8]*4}).write_parquet(p)
+    q=tmp_path/"mark"/"X"/"2021-01.parquet"
+    q.parent.mkdir(parents=True)
+    pl.DataFrame({"event_time":ts,"open":[100.]*4}).write_parquet(q)
+    fund,spans=r.transfer_funding("X")
+    assert spans==[(ts[0],ts[1]),(ts[2],ts[3])]
+    rows=[{"symbol":"X","entry_time":r.A+r.H,"label_end":r.A+5*r.H,
+           "entry_price":100.,"exit_price":101.,"side":1},
+          {"symbol":"X","entry_time":r.A+7*r.H,"label_end":r.A+11*r.H,
+           "entry_price":100.,"exit_price":101.,"side":1}]
+    r.transfer_score(rows,fund,spans)
+    assert rows[0]["outcome_status"]=="scored"
+    assert rows[1]["outcome_status"]=="unverified_funding_schedule"
+    assert rows[1]["standard"] is None
