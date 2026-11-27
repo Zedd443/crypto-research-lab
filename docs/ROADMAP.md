@@ -497,3 +497,14 @@ git pull origin main
 python research_pipeline.py reproduce
 ```
 Upload data/reports/45_reproducibility.zip even if failed.
+
+
+## Checkpoint — Report 45 PASS; conditional predictive diagnostics
+Uploaded 45_reproducibility.zip inspected directly: 42 folds, 84 refits total, maximum absolute probability error exactly zero for both C01 and C02, zero threshold signal mismatches. Frozen configurations reproducible in same environment. No further identical refits required. This does not establish independent predictive skill or economic robustness.
+Next Report 46: descriptive probability reliability in fixed decile bins, class-specific observed frequency, Brier sum versus train-fold prior, conditional target and direction hit rates, net win rate and expectancy at existing .70 threshold, for C01/C02. All qualifying signal opportunities before non-overlap selection; overlapping outcomes not independent trades and not portfolio results. No calibration fitting, threshold optimization, new model, training, download or holdout. C01 binary direction probabilities and C02 three-class cost-aware probabilities are not directly comparable via raw Brier sum. Implemented in research_pipeline.py eb8ab4a; runtime unverified. Remaining literature hypotheses are not declared exhausted; defer resource-heavy branches pending evidence and data. Nested tuning and multiple-testing controls remain outstanding.
+
+```cmd
+git pull origin main
+python research_pipeline.py predictive-diagnostics
+```
+Upload data/reports/46_predictive_diagnostics.zip even if failed.
