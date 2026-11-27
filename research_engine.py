@@ -43,7 +43,8 @@ SPEC={"timeframes":TFS,"horizons_hours":HORIZONS,"thresholds":THRESHOLDS,
       "costs_bps":COSTS,
       "execution":"decision then 15m delay; retain all signal opportunities; separate per-symbol decision-time nonoverlap diagnostic; no shared capital, leverage, margin, or slot constraints",
       "funding":"strict 8h schedule; no unknown funding imputation; common known-cost inner validation mask across horizons/exit variants; outer retains all signals, unknown outcomes explicitly conditional",
-      "holdout_excluded":True}
+      "holdout_excluded":True,"inner_comparison":"common maximum horizon end within each validation window",
+      "family_comparison":"each family selected independently on inner data and evaluated on outer data; joint winner chosen before outer"}
 
 def require(ok,msg):
     if not ok:raise ValueError(msg)
@@ -225,7 +226,7 @@ def inner_masks(ds,fold):
         hi=lo+30*DAY
         require(hi<=fold.test_start,"Inner window exceeds outer train")
         train=(ds["d"]>=fold.train_start)&(ds["z"]<lo)
-        candidate=(ds["d"]>=lo)&(ds["z"]<hi)
+        candidate=(ds["d"]>=lo)&(ds["e"]+max(HORIZONS)*H<hi)
         yield train,candidate&ds["common_known"],lo,hi,int(candidate.sum())
 
 def search_fold(symbol,ds_all,fold,fit_baseline=False):
@@ -280,23 +281,35 @@ def search_fold(symbol,ds_all,fold,fit_baseline=False):
         best=max(eligible,key=lambda r:r["score"])
         for C in SPEC["refine_C"]:evaluate(best["tf"],best["horizon"],"logistic",best["target"],C)
     eligible=[r for r in trials if r["score"] is not None]
-    if not eligible:return {"fold":fold.fold_id,"choice":None,"trials":trials,"signals":[],"baseline":baseline}
-    best=max(eligible,key=lambda r:r["score"])
-    ds=ds_all[(best["tf"],best["horizon"])]
-    train=(ds["d"]>=fold.train_start)&(ds["z"]<fold.test_start)
-    test=(ds["d"]>=fold.test_start)&(ds["z"]<fold.test_end)
-    if best["model"]=="rule":
-        side=rule_signals(ds,train,test,best["feature"],best["quantile"],best["direction"]);p=None
-        require(side is not None,"Selected rule cannot refit")
-    else:
-        p=predict(ds,best["target"],best["C"],train,test,best["model"]);side=None
-        require(p is not None,"Selected model cannot refit")
-    signals=opportunities(ds,test,p,best["threshold"],best["exit"],side)
-    for t in signals:
-        t.update(symbol=symbol,fold=fold.fold_id,tf=best["tf"],horizon_hours=best["horizon"],
-                 target=best["target"],C=best["C"],model=best["model"],feature=best["feature"],
-                 quantile=best["quantile"],direction=best["direction"],inner_edge_score=best["score"])
-    return {"fold":fold.fold_id,"choice":best,"trials":trials,"signals":signals,"baseline":baseline}
+    family_choices={}
+    family_signals={}
+    def outer(best):
+        ds=ds_all[(best["tf"],best["horizon"])]
+        train=(ds["d"]>=fold.train_start)&(ds["z"]<fold.test_start)
+        test=(ds["d"]>=fold.test_start)&(ds["z"]<fold.test_end)
+        if best["model"]=="rule":
+            side=rule_signals(ds,train,test,best["feature"],best["quantile"],best["direction"]);p=None
+            require(side is not None,"Selected rule cannot refit")
+        else:
+            p=predict(ds,best["target"],best["C"],train,test,best["model"]);side=None
+            require(p is not None,"Selected model cannot refit")
+        signals=opportunities(ds,test,p,best["threshold"],best["exit"],side)
+        for t in signals:
+            t.update(symbol=symbol,fold=fold.fold_id,tf=best["tf"],horizon_hours=best["horizon"],
+                     target=best["target"],C=best["C"],model=best["model"],feature=best["feature"],
+                     quantile=best["quantile"],direction=best["direction"],inner_edge_score=best["score"])
+        return signals
+    best=max(eligible,key=lambda r:r["score"]) if eligible else None
+    # All choices fixed before looking at outer outcomes; reuse winner's predictions.
+    for model in (*SPEC["models"],"rule"):
+        candidates=[r for r in eligible if r["model"]==model]
+        choice=max(candidates,key=lambda r:r["score"]) if candidates else None
+        family_choices[model]=choice
+    for model,choice in family_choices.items():
+        family_signals[model]=outer(choice) if choice is not None else []
+    signals=family_signals[best["model"]] if best is not None else []
+    return {"fold":fold.fold_id,"choice":best,"family_choices":family_choices,"trials":trials,
+            "signals":signals,"family_signals":family_signals,"baseline":baseline}
 
 def baseline_signals(symbol,paths,funding,folds):
     require({p.stem for p in paths}=={str(f.fold_id) for f in folds},"Missing frozen baseline folds "+symbol)
@@ -404,7 +417,7 @@ def run(assets):
             builder_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py")])+inspect.getsource(base_arrays)).encode()).hexdigest()
             search_spec=SPEC
             out.update(code_hash=code,model_code_hash=model_code)
-            all_signals=[];baseline=[];funds={}
+            all_signals=[];baseline=[];funds={};families={m:[] for m in (*SPEC["models"],"rule")}
             for symbol in assets:
                 row={"symbol":symbol,"folds":[]};out["assets"].append(row)
                 try:
@@ -434,14 +447,16 @@ def run(assets):
                     cache_id=identity({"raw":raw_hash,"builder":builder_code,"polars":pl.__version__,"numpy":np.__version__,"TFS":TFS,"features":COLS,"horizons":HORIZONS})
                     completed=root/"folds"/row["identity"]
                     ds=None if all((completed/(str(f.fold_id)+".json")).exists() for f in folds) else build(symbol,raw,funding,root/"datasets"/cache_id)
-                    signals=[];base=[]
+                    signals=[];base=[];family_rows={m:[] for m in families}
                     for fold in folds:
                         result=checkpoint(root/"folds",key,fold.fold_id,lambda:search_fold(symbol,ds,fold,fit_baseline))
                         signals.extend(result["signals"]);base.extend(result["baseline"])
-                        row["folds"].append({**{k:v for k,v in result.items() if k not in ("signals","baseline")},"outer_signals":len(result["signals"]),"new_baseline_signals":len(result["baseline"])})
+                        for m in families:family_rows[m].extend(result["family_signals"][m])
+                        row["folds"].append({**{k:v for k,v in result.items() if k not in ("signals","family_signals","baseline")},"outer_signals":len(result["signals"]),"family_outer_signals":{m:len(v) for m,v in result["family_signals"].items()},"new_baseline_signals":len(result["baseline"])})
                         print(symbol,"fold",fold.fold_id,"done",flush=True)
                     if not fit_baseline:base=baseline_signals(symbol,paths,funding,folds)
                     all_signals.extend(signals);baseline.extend(base);funds[symbol]=funding
+                    for m in families:families[m].extend(family_rows[m])
                     row.update(status="pass",outer_signals=len(signals),baseline_signals=len(base),rss_bytes=tree_rss())
                     del ds
                 except Exception:
@@ -450,7 +465,7 @@ def run(assets):
                     ds=None
             require(funds,"No asset completed")
             out["assets_completed"]=list(funds)
-            signal_ledger={"fixed_binary":baseline,"nested_joint_search":all_signals}
+            signal_ledger={"fixed_binary":baseline,"nested_joint_search":all_signals,**{"nested_"+m:v for m,v in families.items()}}
             for name,signals in signal_ledger.items():
                 for fee,slip in COSTS:
                     row={"strategy":name,"fee_bps":fee,"slippage_bps":slip};out["edge_results"].append(row)
