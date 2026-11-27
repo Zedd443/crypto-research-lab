@@ -148,7 +148,7 @@ def run_symbol(task):
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -174,6 +174,7 @@ def main():
         "extended-funding": ["multi_asset_funding_engine.py","--extended"],
         "alt-portfolio": ["portfolio_engine.py","--candidate","alt"],
         "diversification": ["portfolio_engine.py","--candidate","diversification"],
+        "stateful-extended": ["technical_rule_engine.py","--stateful"],
     }
     if args.command in commands:
         if args.command!="coverage" and args.root!=Path("data"):
