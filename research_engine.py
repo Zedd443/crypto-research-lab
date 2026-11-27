@@ -3,7 +3,7 @@ Historical experiment scripts remain intact. One batch report per protocol.
 """
 import os
 os.environ.setdefault("POLARS_MAX_THREADS","1")
-import json, zipfile, traceback, hashlib, time
+import json, zipfile, traceback, hashlib, time, inspect
 from pathlib import Path
 from collections import Counter
 import numpy as np
@@ -348,6 +348,12 @@ def run(assets):
             first,last=folds[0].test_start,folds[-1].test_end
             out.update(first=first,last=last)
             code=digest([Path(n) for n in ["research_engine.py","data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","portfolio_engine.py","experiment_store.py","baseline_engine.py","funding_repair_engine.py","robustness_engine.py"]])
+            # Distinguish data/model identity from wallet replay identity.
+            # Changes only to allocation or intratrade marks must not trigger refits.
+            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,inner_score,search_fold,load_funding))).encode()).hexdigest()
+            builder_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py")])+inspect.getsource(base_arrays)).encode()).hexdigest()
+            search_spec={k:v for k,v in SPEC.items() if k!="wallet"}
+            out.update(code_hash=code,model_code_hash=model_code)
             all_signals=[];baseline=[];funds={}
             for symbol in assets:
                 row={"symbol":symbol,"folds":[]};out["assets"].append(row)
@@ -365,13 +371,18 @@ def run(assets):
                     if symbol=="BTCUSDT" or symbol in oldrows:require(paths,"Frozen baseline cache missing "+symbol)
                     fit_baseline=not paths
                     row["baseline_mode"]="new_fixed_fold_fit" if fit_baseline else "frozen_cache"
-                    key={"symbol":symbol,"protocol":SPEC,"source":digest(sources),"baseline_source":("new_fixed_fold_fit" if fit_baseline else digest(paths)),
-                         "code":code,"numpy":np.__version__,"polars":pl.__version__,"sklearn":sklearn.__version__}
-                    row["identity"]=identity(key)
+                    raw_hash=digest(raw)
                     funding=load_funding(symbol)
+                    funding_hash=hashlib.sha256(funding[0].write_csv().encode()).hexdigest()
+                    row.update(raw_hash=raw_hash,funding_ledger_hash=funding_hash,all_source_hash=digest(sources),
+                               baseline_prediction_hash=digest(paths) if paths else None)
+                    key={"symbol":symbol,"protocol":search_spec,"raw":raw_hash,"funding":funding_hash,
+                         "fit_baseline":fit_baseline,"code":model_code,"numpy":np.__version__,
+                         "polars":pl.__version__,"sklearn":sklearn.__version__}
+                    row["identity"]=identity(key)
                     row["unknown_funding_events"]=int(funding[3][-1])
                     row["unknown_funding_event_times"]=funding[1][np.diff(funding[3])>0].tolist()
-                    cache_id=identity({"raw":digest(raw),"builder":digest([Path("research_engine.py"),Path("feature_engine.py"),Path("data_engine.py")]),"polars":pl.__version__,"numpy":np.__version__,"TFS":TFS,"features":COLS,"horizons":HORIZONS})
+                    cache_id=identity({"raw":raw_hash,"builder":builder_code,"polars":pl.__version__,"numpy":np.__version__,"TFS":TFS,"features":COLS,"horizons":HORIZONS})
                     completed=root/"folds"/row["identity"]
                     ds=None if all((completed/(str(f.fold_id)+".json")).exists() for f in folds) else build(symbol,raw,funding,root/"datasets"/cache_id)
                     signals=[];base=[]
