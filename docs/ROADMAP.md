@@ -508,3 +508,14 @@ git pull origin main
 python research_pipeline.py predictive-diagnostics
 ```
 Upload data/reports/46_predictive_diagnostics.zip even if failed.
+
+
+## Checkpoint — Report 46 PASS; calibration comparator
+Verified uploaded report 46: 30071 OOS observations each. C01 Brier sum .5003892783 versus prior .4998822425; C02 .6186405196 versus prior .6233061394 (different targets; not directly comparable). At threshold .70, C01 long/short signals 149/24, mean probability .765358/.733542, actual target frequency .657718/.583333, net expectancy .00326543/.00475678. C02 long/short signals 91/12, mean probability .776026/.747620, target frequency .626374/.5, net expectancy .00372404/.00090090. All four groups show descriptive overconfidence; short sample sparse and signals overlap, no inference of statistical significance or realized portfolio performance. Retain both candidates and both sides.
+Report 47: prequential single-temperature scaling, expanding prior completed OOS folds only, first six folds calibration warmup, evaluate remaining 36 on common calendar; compare raw vs calibrated Brier/log loss and non-overlap economic results at unchanged .70 threshold, standard/stress costs. Temperature optimized for prior log loss on [.25,8]; no threshold fitting, no model retraining, no holdout. This is an exploratory calibration algorithm comparison, not independent evidence; reduced signal count at fixed probability threshold may be expected and is not alone proof of economic inferiority. Existing CLI research_pipeline.py d067c1d. Runtime unverified.
+
+```cmd
+git pull origin main
+python research_pipeline.py calibration
+```
+Upload data/reports/47_calibration.zip even if failed.
