@@ -5,7 +5,6 @@ import os
 os.environ.setdefault("POLARS_MAX_THREADS","1")
 import json, zipfile, traceback, hashlib, time, inspect
 from pathlib import Path
-from collections import Counter
 import numpy as np
 import polars as pl
 import sklearn
@@ -16,11 +15,10 @@ from baseline_engine import digest
 from feature_engine import technical, BASE_FEATURES
 from validation_protocol import Fold, make_folds
 from experiment_store import identity, checkpoint
-from robustness_engine import A,B,DAY,ledger
+from robustness_engine import A,B,DAY,ledger,ci
 from funding_repair_engine import apply
 from data_engine import aggregate
 from execution_engine import score_trades
-from portfolio_engine import mark_window
 from resource_policy import budget,tree_rss
 from universe import CRYPTO_SYMBOLS
 
@@ -38,12 +36,11 @@ SPEC={"timeframes":TFS,"horizons_hours":HORIZONS,"thresholds":THRESHOLDS,
       "targets":["binary","cost_aware"],"coarse_C":1.,"refine_C":[.1,10.],
       "refine_families":1,"exit_rules":RULES,"features":COLS,
       "delay_minutes":15,"train_days":180,"inner_fit_days":120,"inner_validation_days":60,
-      "outer_test_days":30,"seed":42,"min_inner_trades":5,
-      "objective":"positive primary and stress P&L; maximize stress daily fixed-notional Sharpe; cash if none",
-      "costs_bps":COSTS,"wallet":{"max_positions":5,"position_fraction":.2,
-      "entry_gross_cap":.95,"min_position_fraction":.05},
-      "execution":"decision then 15m delay; allocate at entry; exits before entries; one position per symbol",
-      "funding":"strict 8h schedule; no unknown funding imputation; block evaluation if selected trade affected",
+      "outer_test_days":30,"seed":42,"edge_shrinkage_zero_prior_trades":10,
+      "objective":"positive primary and stress nonoverlap expectancy; rank stress expectancy shrunk toward zero for sparse evidence; abstain if none; no trade frequency quota",
+      "costs_bps":COSTS,
+      "execution":"decision then 15m delay; retain all signal opportunities; separate per-symbol decision-time nonoverlap diagnostic; no shared capital, leverage, margin, or slot constraints",
+      "funding":"strict 8h schedule; no unknown funding imputation; inner candidate unscorable if selected nonoverlap outcome unknown; outer report retains all signals and labels known-only statistics conditional",
       "holdout_excluded":True}
 
 def require(ok,msg):
@@ -168,26 +165,37 @@ def opportunities(ds,test,p,threshold,rule):
         i=ix[j];v=int(side[j]);end,xp,standard,stress=ds["variants"][(v,rule)]
         result.append({"decision_time":int(ds["d"][i]),"entry_time":int(ds["e"][i]),
             "label_end":int(end[i]),"entry_price":float(ds["ep"][i]),"exit_price":float(xp[i]),"side":v,
+            "p_short":float(p[0][j]),"p_long":float(p[1][j]),"threshold":threshold,"exit_rule":rule,
             "standard":float(standard[i]) if np.isfinite(standard[i]) else None,
             "stress":float(stress[i]) if np.isfinite(stress[i]) else None})
     return result
 
+def nonoverlap(signals):
+    """Diagnostic only: independent flat-at-decision rule within each symbol."""
+    free={};selected=[]
+    for t in sorted(signals,key=lambda t:(t["decision_time"],t.get("symbol",""))):
+        symbol=t.get("symbol","")
+        if t["decision_time"]>=free.get(symbol,-1):
+            selected.append(t);free[symbol]=t["label_end"]
+    return selected
+
 def inner_score(signals,first,last):
-    free=-1;selected=[]
-    for t in signals:
-        if t["entry_time"]>=free:selected.append(t);free=t["label_end"]
+    # Avoid counting repeated overlapping outcomes as independent evidence.
+    # No quota on frequency and no cross-symbol constraint.
+    selected=nonoverlap(signals)
     n=len(selected);unknown=sum(t["standard"] is None or t["stress"] is None for t in selected)
-    row={"signals":len(signals),"trades":n,"unknown_funding_trades":unknown,"score":None}
-    if not n or unknown:return row
+    row={"signals":len(signals),"nonoverlap_signals":n,"unknown_funding_trades":unknown,"score":None}
+    if not n or unknown:
+        row["reason"]="no_signals" if not n else "unknown_funding"
+        return row
     primary=np.array([t["standard"] for t in selected])
     stress=np.array([t["stress"] for t in selected])
-    days=np.array([(t["label_end"]-first)//DAY for t in selected])
-    require(np.all((days>=0)&(days<(last-first)//DAY)),"Inner exit outside validation")
-    daily=np.bincount(days,weights=stress,minlength=(last-first)//DAY)
-    row.update(primary_pnl=float(primary.sum()),stress_pnl=float(stress.sum()))
-    sd=daily.std(ddof=1)
-    if n>=SPEC["min_inner_trades"] and primary.sum()>0 and stress.sum()>0 and sd>0:
-        row["score"]=float(daily.mean()/sd*np.sqrt(365))
+    require(all(first<=t["decision_time"]<t["label_end"]<last for t in selected),"Inner signal outside validation")
+    row.update(primary_expectancy=float(primary.mean()),stress_expectancy=float(stress.mean()),
+               primary_pnl=float(primary.sum()),stress_pnl=float(stress.sum()))
+    if primary.mean()>0 and stress.mean()>0:
+        row["score"]=float(stress.sum()/(n+SPEC["edge_shrinkage_zero_prior_trades"]))
+    else:row["reason"]="nonpositive_net_expectancy"
     return row
 
 def search_fold(symbol,ds_all,fold,fit_baseline=False):
@@ -200,7 +208,7 @@ def search_fold(symbol,ds_all,fold,fit_baseline=False):
         p=predict(ds,"binary",1.,train,test)
         require(p is not None,"Cannot fit fixed baseline")
         baseline=opportunities(ds,test,p,.7,"fixed")
-        for t in baseline:t.update(symbol=symbol,priority=0.,fold=fold.fold_id)
+        for t in baseline:t.update(symbol=symbol,fold=fold.fold_id,tf="1h",horizon_hours=4,target="binary",C=1.)
     def evaluate(tf,h,target,C):
         ds=ds_all[(tf,h)]
         train=(ds["d"]>=fold.train_start)&(ds["z"]<cut)
@@ -228,7 +236,7 @@ def search_fold(symbol,ds_all,fold,fit_baseline=False):
     p=predict(ds,best["target"],best["C"],train,test)
     require(p is not None,"Selected configuration cannot refit")
     signals=opportunities(ds,test,p,best["threshold"],best["exit"])
-    for t in signals:t.update(symbol=symbol,priority=best["score"],fold=fold.fold_id)
+    for t in signals:t.update(symbol=symbol,fold=fold.fold_id,tf=best["tf"],horizon_hours=best["horizon"],target=best["target"],C=best["C"],inner_edge_score=best["score"])
     return {"fold":fold.fold_id,"choice":best,"trials":trials,"signals":signals,"baseline":baseline}
 
 def baseline_signals(symbol,paths,funding,folds):
@@ -241,101 +249,77 @@ def baseline_signals(symbol,paths,funding,folds):
         require(((v["entry_time"]-v["decision_time"])==15*MIN).all() and ((v["label_end"]-v["entry_time"])==4*H).all(),"Frozen execution mismatch")
         p=v["prediction"].to_numpy()
         require(np.isfinite(p).all() and ((p>=0)&(p<=1)).all(),"Invalid frozen probabilities")
-        v=v.with_columns(pl.Series("side",np.where(p>=.7,1,np.where(p<=.3,-1,0)))).filter(pl.col("side")!=0)
+        v=v.with_columns(pl.Series("side",np.where(p>=.7,1,np.where(p<=.3,-1,0))),pl.Series("p_long",p),pl.Series("p_short",1-p)).filter(pl.col("side")!=0)
         if not v.height:continue
         e,z,ep,xp,side=[v[k].to_numpy() for k in ("entry_time","label_end","entry_price","exit_price","side")]
         net=[costs(e,z,ep,xp,side,funding,*c) for c in COSTS]
-        for i,t in enumerate(v.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price","side").iter_rows(named=True)):
-            t.update(priority=0.,fold=f.fold_id,standard=float(net[0][i]) if np.isfinite(net[0][i]) else None,
+        for i,t in enumerate(v.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price","side","p_long","p_short").iter_rows(named=True)):
+            t.update(fold=f.fold_id,tf="1h",horizon_hours=4,target="binary",C=1.,threshold=.7,exit_rule="fixed",standard=float(net[0][i]) if np.isfinite(net[0][i]) else None,
                      stress=float(net[1][i]) if np.isfinite(net[1][i]) else None)
             result.append(t)
     return result
 
-def wallet(signals,funds,first,last,fee,slip,out):
-    """One unlevered shared wallet; entry-time reservation, minute-open MTM."""
-    policy=SPEC["wallet"];which="standard" if (fee,slip)==COSTS[0] else "stress"
-    ordered=sorted(signals,key=lambda t:(t["entry_time"],-t["priority"],t["symbol"]))
-    active={};balance=1.;peak=1.;dd=0.;daily={};records=[];reject=Counter()
-    max_open=0;max_reserve=0.;max_mark_gross=0.;active_minutes=0;max_opportunities=0
-    i=0;t=first
-    def equity(t):
-        return balance+sum(pos["floating"][(t-pos["entry_time"])//MIN] for pos in active.values())
-    def snapshot(t):
-        nonlocal peak,dd,max_reserve,max_mark_gross
-        eq=equity(t)
-        require(np.isfinite(eq) and eq>0,"Nonpositive or invalid equity")
-        peak=max(peak,eq);dd=max(dd,1-eq/peak)
-        max_reserve=max(max_reserve,sum(p["notional"] for p in active.values())/eq)
-        max_mark_gross=max(max_mark_gross,sum(p["quantity"]*p["marks"][(t-p["entry_time"])//MIN] for p in active.values())/eq)
-        daily[t//DAY]=eq
-        return eq
-    out["opportunities"]=len(ordered)
-    while i<len(ordered) or active:
-        if not active and i<len(ordered):t=ordered[i]["entry_time"]
-        for symbol in list(active):
-            p=active[symbol]
-            if p["label_end"]==t:
-                balance+=p["notional"]*p["net"];del active[symbol]
-        eq=snapshot(t)
-        j=i
-        while i<len(ordered) and ordered[i]["entry_time"]==t:
-            tr=ordered[i];i+=1;s=tr["symbol"]
-            if s in active:reject["symbol_busy"]+=1;continue
-            if len(active)>=policy["max_positions"]:reject["slots"]+=1;continue
-            used=sum(p["notional"] for p in active.values())
-            notional=min(eq*policy["position_fraction"],eq*policy["entry_gross_cap"]-used)
-            if notional<eq*policy["min_position_fraction"]:reject["capital"]+=1;continue
-            out["blocked_trade"]=tr
-            require(tr[which] is not None,"Accepted trade crosses unknown funding mark")
-            e,z=tr["entry_time"],tr["label_end"]
-            m,absent=mark_window(e,z,s)
-            require(m is not None and not absent,"Missing mark partition "+str(absent))
-            ts=m["event_time"].to_numpy();px=m["open"].cast(pl.Float64).to_numpy()
-            want=np.arange(e,z,MIN)
-            if not np.array_equal(ts,want):
-                out["missing_mark_minutes"]=np.setdiff1d(want,ts).tolist()
-                raise ValueError("Incomplete intratrade mark grid")
-            require(np.isfinite(px).all() and (px>0).all(),"Invalid intratrade marks")
-            side=tr["side"];entry_fill=tr["entry_price"]*(1+side*slip/10000)
-            q=notional/entry_fill
-            f=funds[s][0].filter((pl.col("event_time")>e)&(pl.col("event_time")<=z))
-            ft=f["event_time"].to_numpy()
-            cashflow=f["funding_rate"].to_numpy()*f["mark_price"].to_numpy()*q*side
-            require(np.isfinite(cashflow).all(),"Missing settlement price")
-            cum=np.r_[0.,np.cumsum(cashflow)]
-            floating=q*side*(px-entry_fill)-q*entry_fill*fee/10000-cum[np.searchsorted(ft,ts,side="right")]
-            active[s]={**tr,"notional":notional,"quantity":q,"net":tr[which],"floating":floating,"marks":px}
-            records.append({**tr,"notional":notional,"quantity":q,"net_return":tr[which]})
-            out.pop("blocked_trade",None)
-            max_open=max(max_open,len(active));eq=snapshot(t)
-        max_opportunities=max(max_opportunities,i-j)
-        if active:active_minutes+=1
-        t+=MIN
-    require(len(records)+sum(reject.values())==len(ordered),"Opportunity reconciliation")
-    if records:
-        df=pl.DataFrame(records).select("symbol","entry_time","label_end","entry_price","exit_price","side")
-        fund=pl.concat([f[0].filter(pl.col("mark_price").is_finite().fill_null(False)&(pl.col("mark_price")>0).fill_null(False)) for f in funds.values()])
-        scored=score_trades(df,fee,slip,fund,{s:[(A,B)] for s in funds})
-        require(np.allclose(scored["net_return"].to_numpy(),[r["net_return"] for r in records],rtol=1e-10,atol=1e-12),"Shared wallet cost reconciliation")
-        require(np.isclose(balance,1+sum(r["notional"]*r["net_return"] for r in records)),"Shared wallet cash reconciliation")
-    curve=[];prev=1.
-    for day in range(first//DAY,last//DAY):
-        prev=daily.get(day,prev);curve.append(prev)
-    r=np.diff(np.r_[1.,curve])/np.r_[1.,curve][:-1]
-    sd=r.std(ddof=1)
-    out.update(status="pass",trades=len(records),rejected=dict(reject),return_fraction=balance-1,
-        max_mtm_drawdown=float(dd),daily_sharpe=float(r.mean()/sd*np.sqrt(365)) if sd>0 else None,
-        max_open=max_open,peak_reserved_to_equity=float(max_reserve),peak_mark_gross_to_equity=float(max_mark_gross),
-        max_simultaneous_opportunities=max_opportunities,exposure_any_position=active_minutes*MIN/(last-first),
-        trades_per_symbol=dict(Counter(x["symbol"] for x in records)),daily_equity=curve,ledger=records)
+def edge_stats(signals,which,first,last,bootstrap=False):
+    """Fixed unit notional per outcome, NOT shared equity or portfolio return."""
+    known=[t for t in signals if t[which] is not None]
+    r=np.array([t[which] for t in known],dtype=float)
+    row={"signals":len(signals),"scored_signals":len(known),
+         "unknown_funding_signals":len(signals)-len(known),
+         "coverage":len(known)/len(signals) if signals else None,
+         "expectancy":None,"win_rate":None,"profit_factor":None,
+         "sum_unit_notional_returns":None,
+         "signals_per_30_days":len(signals)*30*DAY/(last-first)}
+    if not len(r):return row
+    require(np.isfinite(r).all(),"Invalid net returns")
+    loss=-r[r<0].sum()
+    row.update(expectancy=float(r.mean()),win_rate=float((r>0).mean()),
+               profit_factor=float(r[r>0].sum()/loss) if loss>0 else None,
+               sum_unit_notional_returns=float(r.sum()),
+               no_losses=bool(loss==0))
+    if bootstrap:
+        # Calendar blocks preserve simultaneous cross-asset dependence.
+        n=(last-first)//DAY
+        days=np.array([(t["label_end"]-first)//DAY for t in known])
+        require(np.all((days>=0)&(days<n)),"Outcome outside development calendar")
+        daily=np.bincount(days,weights=r,minlength=n);count=np.bincount(days,minlength=n)
+        row["bootstrap_nominal"]=[ci(daily,count,b) for b in (7,30)]
+    return row
+
+def evaluate_edge(signals,funds,first,last,fee,slip):
+    which="standard" if (fee,slip)==COSTS[0] else "stress"
+    # Reconcile vectorized cost arithmetic against the historical execution engine.
+    for symbol,fund in funds.items():
+        known=[t for t in signals if t["symbol"]==symbol and t[which] is not None]
+        if not known:continue
+        df=pl.DataFrame(known).select("symbol","entry_time","label_end","entry_price","exit_price","side")
+        valid=fund[0].filter(pl.col("mark_price").is_finite().fill_null(False)&(pl.col("mark_price")>0).fill_null(False))
+        scored=score_trades(df,fee,slip,valid,{symbol:[(A,B)]})
+        require(scored.height==len(known) and np.allclose(scored["net_return"].to_numpy(),[t[which] for t in known],rtol=1e-10,atol=1e-12),"Edge cost reconciliation failed "+symbol)
+    independent=nonoverlap(signals)
+    def breakdown(rows,include_ci=False):
+        return {"overall":edge_stats(rows,which,first,last,include_ci),
+                "per_symbol":{symbol:edge_stats([t for t in rows if t["symbol"]==symbol],which,first,last) for symbol in funds},
+                "per_side":{name:edge_stats([t for t in rows if t["side"]==side],which,first,last) for name,side in (("long",1),("short",-1))},
+                "per_fold":{str(f.fold_id):edge_stats([t for t in rows if t["fold"]==f.fold_id],which,f.test_start,f.test_end) for f in make_folds(A,B,180,30)}}
+    all_stats=breakdown(signals);nonoverlap_stats=breakdown(independent,True)
+    # Equal-asset summary complements pooled results, which weight frequent signals more.
+    for stats in (all_stats,nonoverlap_stats):
+        vals=[v["expectancy"] for v in stats["per_symbol"].values() if v["expectancy"] is not None]
+        stats["equal_symbol_mean_expectancy"]=float(np.mean(vals)) if vals else None
+        stats["symbols_with_scored_signals"]=len(vals)
+    unknown=[{k:t[k] for k in ("symbol","decision_time","entry_time","label_end","side","fold")} for t in signals if t[which] is None]
+    return {"status":"incomplete_funding" if unknown else "pass","all_opportunities":all_stats,
+            "per_symbol_nonoverlap":nonoverlap_stats,"unknown_funding_outcomes":unknown,
+            "note":"All opportunities retained; overlapping returns are not independent; known-only results conditional if any funding is missing; no allocation or shared equity."}
 
 def run(assets):
     import portalocker
     started=time.monotonic()
     budget(1,per_worker_bytes=1024**3,threads_per_worker=1)
     root=ROOT/"research_v2";root.mkdir(parents=True,exist_ok=True)
-    out={"protocol":SPEC,"assets_requested":assets,"scope":"Nested historical development search, not independent holdout. No live orders. Five-asset default is a readiness pilot, not a survivorship-free universe. Entry notional cap is not Binance margin/liquidation modeling.","assets":[],"portfolios":[]}
+    out={"protocol":SPEC,"assets_requested":assets,"scope":"Nested historical signal-edge search, not independent holdout. No shared-wallet allocation, capital limits or live orders. Five-asset default is a readiness pilot, not a survivorship-free universe.","assets":[],"edge_results":[]}
     report=ROOT/"reports"/"research_batch.zip";report.parent.mkdir(parents=True,exist_ok=True)
+    signal_ledger={}
     with portalocker.Lock(str(root/"coordinator.lock"),timeout=0):
         try:
             gate=read_report("45_reproducibility.zip")
@@ -347,12 +331,11 @@ def run(assets):
             require(len(folds)==42,"Unexpected folds")
             first,last=folds[0].test_start,folds[-1].test_end
             out.update(first=first,last=last)
-            code=digest([Path(n) for n in ["research_engine.py","data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","portfolio_engine.py","experiment_store.py","baseline_engine.py","funding_repair_engine.py","robustness_engine.py"]])
-            # Distinguish data/model identity from wallet replay identity.
-            # Changes only to allocation or intratrade marks must not trigger refits.
-            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,inner_score,search_fold,load_funding))).encode()).hexdigest()
+            code=digest([Path(n) for n in ["research_engine.py","data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","experiment_store.py","baseline_engine.py","funding_repair_engine.py","robustness_engine.py"]])
+            # Keep selection identity independent of final report presentation.
+            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,nonoverlap,inner_score,search_fold,load_funding))).encode()).hexdigest()
             builder_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py")])+inspect.getsource(base_arrays)).encode()).hexdigest()
-            search_spec={k:v for k,v in SPEC.items() if k!="wallet"}
+            search_spec=SPEC
             out.update(code_hash=code,model_code_hash=model_code)
             all_signals=[];baseline=[];funds={}
             for symbol in assets:
@@ -361,7 +344,6 @@ def run(assets):
                     raw=monthly(ROOT/"futures"/symbol/"1m")
                     require(len(raw)==48,"Missing raw partitions")
                     sources=raw+monthly(ROOT/"funding"/symbol)+monthly(ROOT/"mark"/symbol)
-                    sources+=sorted(p for p in (ROOT/"mark_repairs"/symbol).glob("*") if p.is_file() and "2021-01"<=p.stem<="2024-12")
                     if symbol=="BTCUSDT":
                         p=ROOT/"funding_repairs"/"BTCUSDT.json"
                         if p.exists():sources.append(p)
@@ -401,17 +383,20 @@ def run(assets):
                     ds=None
             require(funds,"No asset completed")
             out["assets_completed"]=list(funds)
-            for name,signals in [("fixed_binary",baseline),("nested_joint_search",all_signals)]:
+            signal_ledger={"fixed_binary":baseline,"nested_joint_search":all_signals}
+            for name,signals in signal_ledger.items():
                 for fee,slip in COSTS:
-                    row={"strategy":name,"fee_bps":fee,"slippage_bps":slip};out["portfolios"].append(row)
-                    try:wallet(signals,funds,first,last,fee,slip,row)
+                    row={"strategy":name,"fee_bps":fee,"slippage_bps":slip};out["edge_results"].append(row)
+                    try:row.update(evaluate_edge(signals,funds,first,last,fee,slip))
                     except Exception:row.update(status="blocked",error=traceback.format_exc())
                     print(name,fee,slip,row["status"],flush=True)
-            out["status"]="pass" if all(r["status"]=="pass" for r in out["assets"]+out["portfolios"]) else "partial"
+            out["status"]="pass" if all(r["status"]=="pass" for r in out["assets"]+out["edge_results"]) else "partial"
         except Exception:out.update(status="fail",error=traceback.format_exc())
         out["elapsed_seconds"]=time.monotonic()-started
         tmp=report.with_suffix(".tmp")
-        with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
+        with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:
+            z.writestr("metrics.json",json.dumps(out,allow_nan=False))
+            z.writestr("signals.json",json.dumps(signal_ledger,allow_nan=False))
         tmp.replace(report);print(report,out["status"],flush=True)
     return 0 if out["status"]=="pass" else 1
 
