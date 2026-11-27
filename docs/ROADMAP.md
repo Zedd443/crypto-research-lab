@@ -58,6 +58,30 @@ User's local pytest: 25 passed, 3 grouped as-of sortedness warnings, 37.05s. Ini
 
 ---
 
+## M1 result and active M2 decision — 2026-11-27
+
+Verified uploaded research_batch.zip: ZIP integrity good; five assets completed 42 folds each, 124,320 candidate-fold evaluations, elapsed 423 seconds. Status partial only due to unknown funding outcomes for some adaptive signals (all opportunities: joint 32, logistic 12, tree 42, rule 14; fixed comparator zero). Nonoverlap results on scored outcomes, fraction units converted to percent below:
+
+| Strategy | Signals | Known | Standard expectancy % | Stress expectancy % | Standard PF |
+|---|---:|---:|---:|---:|---:|
+| Fixed logistic | 488 | 488 | .605537 | .424592 | 1.65323 |
+| Joint selection | 1643 | 1635 | -.084102 | -.264324 | .94671 |
+| Logistic selection | 1440 | 1435 | -.015943 | -.196282 | .98811 |
+| Shallow tree selection | 2854 | 2847 | .007963 | -.172198 | 1.00678 |
+| Rule selection | 1812 | 1808 | -.139249 | -.319454 | .91047 |
+
+Fixed comparator 7/30d nominal standard CI [.267539%, .944609%] / [.316233%, .898031%]; stress [.086849%, .763419%] / [.135655%, .716854%]. Fixed asset expectancy % BTC .5512, ETH .3764, BNB .6237, TRX .6950, NEAR .7335. All-opportunity results differ from nonoverlap results; e.g. adaptive logistic known-only mean +.11850%, not independent trades. Do not claim all adaptive opportunities are negative. Pilot assets purposively selected from earlier development screens; neither nominal intervals nor nested folds remove that selection bias. Park current adaptive selection protocol, not entire ML/tree/rule families. Missing marks for parked strategies do not justify targeted repair now.
+
+**Active M2 transfer phase** replaces M1 command as next action. Freeze C01 1h/4h/15m/.70/C=1 and 180d rolling train, no more search. All configured crypto symbols (30), including prior negative/failed and shorter-history contracts. Reuse compatible cached frozen predictions (raw digest/chronology; pilot prediction hash against batch). New or incompatible symbols fit fixed specification only; eligibility uses at least 90% of expected historical completed training outcomes, no future test count requirement. New listing/delisting eligibility based on observed candles, not certified lifecycle data; gaps reset features, left-joined execution outcomes preserve missing future prices. No new downloads. Funding: independently verified existing 8h schedule spans; missing/irregular coverage unscored, missing settlement marks not imputed, conditional net results distinct from fee/slippage-only. Includes all opportunities and within-symbol nonoverlap, pooled and equal-symbol expectancy, pilot versus previous screening versus additional universe, block intervals nominal only. Full historical coverage may be incomplete; no claim of survivorship-free sample or untouched holdout. No automatic capital constraints. Source/checkpoints retained; new fixed transfer caches separate. Regression tests added, runtime pending.
+
+```cmd
+git pull origin main && python -m pytest -q tests/test_research_components.py -k transfer && python research_pipeline.py batch --phase transfer
+```
+
+Upload only data/reports/research_transfer.zip. If pytest fails, send traceback. M2 outcome determines whether further fixed signal investigation is warranted; do not keep expanding search merely to rescue negative findings. No new Python file, old search remains reproducible. Implementation commits 0e13057, 58596d9, b313c15, 65bc600, b364978. The 90% threshold is a prespecified engineering choice, not established by data. Actual results pending.
+
+---
+
 ## Superseded shared-wallet proposal (historical design only)
 
 The prior active section proposed shared-wallet replay, fixed five slots and 20% allocations; user explicitly deferred these constraints until after signal-edge discovery. Git history preserves that implementation and documentation; do not run it as the current milestone. Previous source hashes/checkpoints remain intact.
