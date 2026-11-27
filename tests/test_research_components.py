@@ -87,32 +87,23 @@ def test_batch_funding_boundary_and_unknown():
     bad=(f,fund[1],fund[2],np.array([0,0,1]))
     assert np.isnan(costs(*args,bad,5,1)).all()
 
-def test_batch_wallet_shared_capacity(monkeypatch):
-    import numpy as np
-    import research_engine as r
-    e=r.A+r.MIN; z=e+2*r.MIN
-    def marks(e,z,symbol):
-        return pl.DataFrame({"event_time":np.arange(e,z,r.MIN),"open":[100.] * ((z-e)//r.MIN)}),[]
-    monkeypatch.setattr(r,"mark_window",marks)
-    funds={}; signals=[]
-    for i in range(6):
-        symbol="TEST"+str(i)
-        f=pl.DataFrame({"symbol":[symbol],"event_time":[r.A],"funding_rate":[0.],"mark_price":[100.]})
-        funds[symbol]=(f,np.array([r.A]),np.array([0.,0.]),np.array([0,0]))
-        net=r.costs(np.array([e]),np.array([z]),np.array([100.]),np.array([101.]),1,funds[symbol],5,1)[0]
-        signals.append({"symbol":symbol,"decision_time":e-15*r.MIN,"entry_time":e,"label_end":z,
-                        "entry_price":100.,"exit_price":101.,"side":1,"priority":float(i),
-                        "fold":0,"standard":float(net),"stress":float(net)})
-    out={}
-    r.wallet(signals,funds,r.A,r.A+2*r.DAY,5,1,out)
-    assert out["status"]=="pass"
-    assert out["trades"]==5 and out["max_open"]==5
-    assert out["rejected"]=={"slots":1}
-    assert "TEST0" not in out["trades_per_symbol"]
-    assert out["max_mtm_drawdown"]>0 and out["return_fraction"]>0
-    # Future missing funding is not an entry-time rejection feature.
-    signals[-1]["standard"]=None
-    blocked={}
-    with pytest.raises(ValueError,match="unknown funding"):
-        r.wallet(signals,funds,r.A,r.A+2*r.DAY,5,1,blocked)
-    assert blocked["blocked_trade"]["symbol"]=="TEST5"
+def test_batch_signal_edge_no_shared_capital():
+    from research_engine import nonoverlap,inner_score,edge_stats,A,DAY
+    e=A+60000;z=e+3600000
+    signals=[{"symbol":"TEST"+str(i),"decision_time":A,"entry_time":e,"label_end":z,
+              "side":1,"standard":.02,"stress":.01,"fold":0} for i in range(100)]
+    # All 100 simultaneous symbols count, regardless of any notional budget.
+    assert len(nonoverlap(signals))==100
+    # A repeated opportunity in one coin remains in the raw signal sample.
+    repeated={**signals[0],"decision_time":e,"entry_time":e+60000}
+    all_signals=signals+[repeated]
+    assert len(nonoverlap(all_signals))==100
+    assert edge_stats(all_signals,"standard",A,A+DAY)["signals"]==101
+    # Sparse positive evidence is eligible, but shrunk rather than forced to trade.
+    score=inner_score(signals[:1],A,A+DAY)
+    assert score["score"]==pytest.approx(.01/11)
+    missing={**signals[0],"standard":None,"stress":None}
+    result=edge_stats([missing,signals[1]],"standard",A,A+DAY)
+    assert result["signals"]==2 and result["scored_signals"]==1
+    assert result["unknown_funding_signals"]==1 and result["coverage"]==.5
+    assert inner_score([missing],A,A+DAY)["score"] is None
