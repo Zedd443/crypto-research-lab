@@ -4,15 +4,11 @@ Binance USD-M futures research focused on finding robust, cost-aware signal edge
 
 ## Active workflow (Windows CMD)
 
-From the repository root with the existing .venv activated:
+M1 search and M2 cross-asset transfer completed. The frozen C01 candidate failed later-period historical economic evaluation (2025-01-01 to 2026-10-23 exclusive); park it, do not rerun or retune on that period. Next signal-discovery hypothesis must be specified before a new batch. No portfolio allocation yet.
 
-```cmd
-git pull origin main && python -m pytest -q tests/test_research_components.py -k transfer && python research_pipeline.py batch --phase temporal
-```
+For future batches, copy only the `RESEARCH SUMMARY` from the terminal. If more detail is required, share the corresponding `data/reports/research_*.json`. Signal ledger and fold checkpoints remain local; old ZIP reports remain readable and must not be deleted. No repeat run is needed for this reporting-only change.
 
-M1 search completed; fixed logistic beat the adaptive selection methods on the five-asset pilot. M2 broad transfer did not establish generalization beyond the five preselected pilot assets. Active temporal evaluation tests the same frozen specification in later historical data, 2025-01-01 to 2026-10-23 exclusive, without tuning. Primary cohort is fixed BTC/ETH/BNB/TRX/NEAR; other configured assets are contextual reference only. One upload after the run: `data/reports/research_temporal.zip` (also if status is partial/fail). Not certified unseen or prospective evidence. If tests fail before the batch, send the traceback. Do not run historical commands one by one. Repeat the same command after interruption; completed per-symbol/fold checkpoints are reused. No automatic downloads or data repair, no holdout access.
-
-Transfer default: all configured crypto contracts. Optional `--symbols` accepts a subset. Reuse compatible predictions, otherwise fit the fixed specification when historical training coverage reaches 90%. Missing execution prices or funding outcomes remain unscored; fee/slippage-only and verified net results are separate. No certified listing/delisting dates; observed history is a coverage proxy. Historical M1 search remains available via `--phase search` (default).
+The existing `batch --phase search/transfer/temporal` commands remain available for reproducibility, not active next steps. Resume compatible incomplete runs using the same command. Transfer uses historical coverage, not certified listing dates. Funding/price coverage limitations remain disclosed. No automatic downloads or repairs.
 
 ## Source map
 
@@ -37,7 +33,7 @@ Fixed 15m delay, 180d outer train, two forward 30d inner validation windows foll
 
 Report fixed historical baseline, nested overall selection and independently inner-selected logistic/tree/rule families on outer development folds; matched same-time equal-random-direction comparator; per-symbol, per-fold, per-side and pooled expectancy, win rate, PF, coverage, equal-symbol mean and nominal calendar-block bootstrap. Matched direction comparator uses the same entry time and exit policy for the opposite direction; it does not isolate timing skill. No model wins solely because it has better predictive accuracy. Historical outer folds remain development evidence, not untouched holdout. Multiple-testing control and fresh evaluation are outstanding. A completed batch is not proof of edge.
 
-All qualifying long/short opportunities are retained across assets. Within-symbol nonoverlap is a diagnostic, not shared capital allocation. Fee, slippage and funding included. Unknown funding outcomes stay in the ledger, with conditional known-only statistics and partial status; no intratrade mark replay, margin, sizing, capital allocation or liquidation checks. One ZIP includes metrics.json and signals.json. Do not infer portfolio P&L from fixed-unit outcome sums.
+All qualifying long/short opportunities are retained across assets. Within-symbol nonoverlap is a diagnostic, not shared capital allocation. Fee, slippage and funding included. Unknown funding outcomes stay in the ledger, with conditional known-only statistics and partial status; no intratrade mark replay, margin, sizing, capital allocation or liquidation checks. Batch writes standalone metrics JSON and a separate local signal ledger. Do not infer portfolio P&L from fixed-unit outcome sums.
 
 ## Data
 
