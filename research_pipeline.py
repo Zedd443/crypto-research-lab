@@ -3,6 +3,11 @@ import argparse
 import os
 import multiprocessing as mp
 import time
+import sys
+
+# Batch stays in one process; constrain threads before importing Polars.
+if __name__=='__main__' and sys.argv[1:2]==['batch']:
+    os.environ['POLARS_MAX_THREADS']='1'
 
 # Each spawned worker has its own HTTP session and bounded Polars thread pool.
 os.environ.setdefault('POLARS_MAX_THREADS', '2')
@@ -443,12 +448,11 @@ def main():
     args=p.parse_args()
     if args.command=="batch":
         if args.root!=Path("data"):p.error("Batch currently uses default data root")
-        import subprocess,sys
-        from research_engine import ASSETS
+        from research_engine import ASSETS,run
         symbols=ASSETS if args.symbols==SYMBOLS else list(dict.fromkeys(args.symbols))
         from universe import CRYPTO_SYMBOLS
         if not set(symbols).issubset(CRYPTO_SYMBOLS):p.error("Batch supports crypto contracts only; listing-aware TradFi not yet supported")
-        raise SystemExit(subprocess.call([sys.executable,"research_engine.py","--symbols",*symbols],env={**os.environ,"POLARS_MAX_THREADS":"1"}))
+        raise SystemExit(run(symbols))
     if args.command=="calibration":
         if args.root!=Path("data"):p.error("Calibration uses default data root")
         return calibration()
