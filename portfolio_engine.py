@@ -152,14 +152,60 @@ def audit_cost_aware(out):
                 out["scenarios"].append({"candidate":name,"fee_bps":fee,"slippage_bps":slip,"fixed_notional_pnl":float(scored["net_return"].sum()),**result})
                 print(name,fee,slip,frac,"done",flush=True)
 
+def audit_exit(out):
+    """Paired time-exit diagnostic on frozen entries; no re-entry or fitting."""
+    from funding_repair_engine import apply
+    from data_engine import MINUTE
+    from robustness_engine import metrics
+    with zipfile.ZipFile(ROOT/"reports"/"35_candidate_portfolio.zip") as zz:
+        rep=json.loads(zz.read("metrics.json"))
+    require(rep["status"]=="pass","Report 35 not passed")
+    fund=apply(ledger(ROOT)).sort("event_time")
+    require(not fund["mark_price"].null_count(),"Incomplete funding")
+    first,last=rep["first"],rep["last"]
+    out.update(first=first,last=last,experiments=rep["experiments"],results=[],mark_coverage={})
+    for name in ("C01","C02"):
+        ref,=[s for s in rep["scenarios"] if s["candidate"]==name and s["fee_bps"]==5 and s["slippage_bps"]==1 and s["fraction"]==1.]
+        keys=["symbol","decision_time","entry_time","label_end","entry_price","exit_price","side"]
+        original=pl.DataFrame(ref["ledger"]).select(keys).sort("entry_time")
+        require(original.height== (104 if name=="C01" else 63),"Trade count changed")
+        require(original["entry_time"].min()>=A and original["label_end"].max()<B,"Outside development")
+        for minutes in (120,180,240):
+            records=[]
+            for t in original.iter_rows(named=True):
+                e,z=t["entry_time"],t["label_end"]
+                require(z-e==240*MINUTE,"Unexpected original horizon")
+                q=e+minutes*MINUTE
+                month=datetime.fromtimestamp(q/1000,timezone.utc).strftime("%Y-%m")
+                p=ROOT/"futures"/"BTCUSDT"/"1m"/(month+".parquet")
+                x=pl.scan_parquet(p).filter(pl.col("open_time")==q).select("open").collect()
+                require(x.height==1,"Missing or duplicate exit price")
+                px=float(x["open"][0])
+                require(np.isfinite(px) and px>0,"Invalid exit price")
+                if minutes==240:require(np.isclose(px,t["exit_price"]),"Original exit mismatch")
+                records.append({**t,"label_end":q,"exit_price":px})
+            trades=pl.DataFrame(records)
+            coverage=mark_audit(trades);out["mark_coverage"][name+"_"+str(minutes)]=coverage
+            require(coverage["affected_trades"]==0,"Missing intratrade marks")
+            for fee,slip in [(5,1),(10,5)]:
+                scored=score_trades(trades,fee,slip,fund,{"BTCUSDT":[(A,B)]})
+                require(scored.height==original.height,"Trade count changed")
+                if minutes==240:
+                    baseline,=[s for s in rep["scenarios"] if s["candidate"]==name and s["fee_bps"]==fee and s["slippage_bps"]==slip and s["fraction"]==1.]
+                    require(np.isclose(scored["net_return"].sum(),baseline["fixed_notional_pnl"]),"Baseline reconciliation failed")
+                result=replay(scored,fund,1.,first,last,fee/10000)
+                result.pop("minute_equity");result.pop("ledger")
+                out["results"].append({"candidate":name,"holding_minutes":minutes,"fee_bps":fee,"slippage_bps":slip,"economics":metrics(scored,first,last),"portfolio":result})
+                print(name,minutes,fee,slip,"done",flush=True)
+
 def main():
     import argparse
-    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare'],default='incumbent');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit'],default='incumbent');args=p.parse_args()
     out={"scope":"Development diagnostic, fixed fractions not optimized; minute-open marks, actual assumed funding boundary (entry,exit], no liquidation or margin tiers; no intra-minute extrema or executable mark fills."}
     try:
-        (audit_cost_aware if args.candidate=="compare" else audit)(out);out["status"]="pass"
+        ({"compare":audit_cost_aware,"exit":audit_exit,"incumbent":audit}[args.candidate])(out);out["status"]="pass"
     except Exception:out["status"]="fail";out["error"]=traceback.format_exc()
-    p=ROOT/"reports"/("35_candidate_portfolio.zip" if args.candidate=="compare" else "10_portfolio.zip");p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","incumbent":"10_portfolio.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
