@@ -487,3 +487,13 @@ git pull origin main
 python research_pipeline.py stateful-extended
 ```
 Upload data/reports/43_stateful_extended.zip, or terminal traceback if blocked.
+
+
+## Checkpoint — Report 44 PASS; frozen prediction reproducibility
+Uploaded 44_research_integrity.zip directly inspected: status pass, 42 folds and 48 monthly feature checks, dataset_hash_matches true, current and original SHA256 both 06e9533c3b29d33a567e4f40d9164188c7adf705cc366a9a075e166b0fb14600. Existing report 44 checks passed for manifest, feature finite-value reconstruction, raw entry/exit prices, timing, purge, common eligibility, probabilities, training priors, funding hash and cost-aware targets. Not an exhaustive leakage or prediction reproducibility proof. Report 43 prior conversation recorded stateful OBV/filter screening as parked; its numerical results not reverified in this checkpoint. Next Report 45 refits only frozen C01/C02 on the same 42 folds, sequentially, same model parameters and preprocessing; compares maximum absolute probability error <=1e-6 and zero threshold signal mismatches. No original checkpoint overwrites, tuning, downloads or holdout. CLI reproduce implemented in research_pipeline.py f9e98f3. Runtime unverified. Refit is intentional and limited to reproducibility, not a new experiment search.
+
+```cmd
+git pull origin main
+python research_pipeline.py reproduce
+```
+Upload data/reports/45_reproducibility.zip even if failed.
