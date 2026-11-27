@@ -416,3 +416,13 @@ git pull origin main
 python research_pipeline.py candidate-portfolio
 ```
 Upload data/reports/35_candidate_portfolio.zip even if failed.
+
+
+## Checkpoint — Report 35 PASS; paired exit diagnostic
+35_candidate_portfolio.zip verified: C01/C02 104/63 trades, mark coverage 24960/15120 of expected minutes, zero affected trades. At fraction 1, primary compounded return 74.0335%/52.4671%, MTM DD both 12.7900%, daily annualized Sharpe 1.59919/1.42300, exposure 1.37566%/.83333%; stress return 44.3682%/36.1312%, DD both 13.2660%. C01 retains incumbent, C02 challenger, no deployment claim. Next Report 36: paired fixed-entry time exit 120/180/240 minutes, same frozen trades and directions from report 35, no new entries after earlier exit, exact minute open exit, funding rescored, common calendar, 5/1 and 10/5 bps, fraction 1 portfolio, mark audit and 240m reconciliation. Exploratory shorter holding hypotheses motivated by report 23; not optimized or independent, does not establish dynamic strategy or retrained horizon performance. Implemented in existing portfolio_engine.py (ec09fd4) and CLI (16e2512). Runtime unverified. No new Python files, downloads, training or holdout.
+
+```cmd
+git pull origin main
+python research_pipeline.py time-exit
+```
+Upload data/reports/36_time_exit.zip even if failed.
