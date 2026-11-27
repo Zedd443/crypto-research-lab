@@ -146,9 +146,94 @@ def run_symbol(task):
         print(symbol,"FAILED",repr(e),flush=True)
         return symbol,repr(e)
 
+def integrity():
+    """Audit frozen candidate inputs and predictions without training."""
+    import zipfile, traceback
+    import numpy as np
+    from baseline_engine import files,load_fold,digest
+    from validation_protocol import Fold,make_folds,manifest
+    from experiment_store import identity
+    from feature_engine import technical,BASE_FEATURES
+    from cost_aware_target_engine import targets,KEYS
+    from funding_repair_engine import apply
+    from robustness_engine import A,B,ledger
+    root=Path("data")
+    out={"scope":"Frozen C01/C02 input and checkpoint audit; no model refit, no holdout, no claim of exhaustive leakage proof","folds":[],"months":[]}
+    def check(ok,msg):
+        if not ok:raise ValueError(msg)
+    try:
+        folder,=list((root/"experiments").glob("6823506d*"))
+        spec=json.loads((folder/"spec.json").read_text())
+        man=json.loads((folder/"manifest.json").read_text())
+        check(identity(spec)==folder.name and spec["manifest_id"]==man["manifest_id"],"Identity mismatch")
+        folds=make_folds(A,B,180,30)
+        check(manifest(folds,B,man["holdout_end"],man["dataset_id"])==man,"Manifest mismatch")
+        check(len(folds)==42 and spec["model"]=="logistic" and spec["tf"]=="1h" and spec["horizon"]==4 and spec["delay_minutes"]==15 and set(spec["features"])==set(BASE_FEATURES)-{"body"},"Specification mismatch")
+        pairs=[(p,q) for p,q in files(root,["BTCUSDT"],"1h",4,15) if "2021-01"<=p.stem<="2024-12"]
+        check(len(pairs)==48,"Missing feature/label partitions")
+        out["current_dataset_hash"]=digest([p for pair in pairs for p in pair])
+        out["original_dataset_hash"]=man["dataset_id"]
+        out["dataset_hash_matches"]=out["current_dataset_hash"]==man["dataset_id"]
+        with zipfile.ZipFile(root/"reports"/"21_cost_aware_target.zip") as z:rep=json.loads(z.read("metrics.json"))
+        check(rep["status"]=="pass","Report 21 failed")
+        fund=apply(ledger(root)).sort("event_time")
+        check(not fund["mark_price"].null_count(),"Funding marks missing")
+        import hashlib
+        check(hashlib.sha256(fund.write_csv().encode()).hexdigest()==rep["funding_hash"],"Funding hash mismatch")
+        # Rebuild hourly source from raw month, retaining only small hourly frames.
+        bars=[];points=[]
+        for p in sorted((root/"futures"/"BTCUSDT"/"1m").glob("*.parquet")):
+            if not "2020-12"<=p.stem<="2024-12":continue
+            raw=pl.read_parquet(p).sort("open_time")
+            ts=raw["open_time"].to_numpy()
+            check(len(ts)>0 and np.all(ts%60000==0) and np.all(np.diff(ts)==60000),"Raw minute discontinuity "+p.stem)
+            bars.append(de.aggregate(raw,"1h"))
+            points.append(raw.filter(pl.col("open_time")%3600000==900000).select("open_time","open"))
+        hourly=pl.concat(bars).sort("open_time")
+        check(hourly["open_time"].n_unique()==hourly.height,"Duplicate hourly timestamp")
+        expected=technical(hourly,3600000).select("decision_time",*BASE_FEATURES)
+        prices=pl.concat(points).sort("open_time")
+        check(prices["open_time"].n_unique()==prices.height,"Duplicate execution timestamps")
+        for p,q in pairs:
+            cached=pl.read_parquet(p).filter(pl.col("decision_time")<B).select("decision_time",*BASE_FEATURES)
+            merged=cached.join(expected,on="decision_time",suffix="_raw",validate="1:1")
+            check(merged.height==cached.height,"Missing raw feature source "+p.stem)
+            for c in BASE_FEATURES:
+                a=merged[c].cast(pl.Float64).to_numpy();b=merged[c+"_raw"].cast(pl.Float64).to_numpy()
+                # Compare eligible finite values; cache may have shorter warmup.
+                mask=np.isfinite(a)
+                check(np.allclose(a[mask],b[mask],rtol=1e-8,atol=1e-10),"Feature mismatch "+p.stem+" "+c)
+            out["months"].append({"month":p.stem,"feature_rows":cached.height})
+        for fold in folds:
+            train,test=load_fold(pairs,spec["features"],fold)
+            old=pl.read_parquet(folder/"predictions"/(str(fold.fold_id)+".parquet"))
+            new=pl.read_parquet(root/"target_v2"/rep["experiment"]/(str(fold.fold_id)+".parquet"))
+            check(old.select(KEYS).equals(test.select(KEYS)) and new.select(KEYS).equals(old.select(KEYS)),"Checkpoint eligibility mismatch "+str(fold.fold_id))
+            check(train["label_end"].max()<fold.test_start and test["label_end"].max()<fold.test_end,"Purge violation")
+            for f in (train,test):
+                check(((f["entry_time"]-f["decision_time"])==900000).all() and ((f["label_end"]-f["entry_time"])==14400000).all(),"Timing mismatch")
+                j=f.join(prices.rename({"open_time":"entry_time","open":"raw_entry"}),on="entry_time",validate="1:1").join(prices.rename({"open_time":"label_end","open":"raw_exit"}),on="label_end",validate="1:1")
+                check(j.height==f.height and np.allclose(j["entry_price"],j["raw_entry"],rtol=1e-12,atol=0) and np.allclose(j["exit_price"],j["raw_exit"],rtol=1e-12,atol=0),"Execution price mismatch")
+                check(np.allclose(j["target_return"],np.log(j["raw_exit"].to_numpy()/j["raw_entry"].to_numpy()),rtol=1e-10,atol=1e-12),"Label mismatch")
+            prob=old["prediction"].to_numpy();multi=new.select("p_short","p_flat","p_long").to_numpy()
+            check(np.isfinite(prob).all() and ((prob>=0)&(prob<=1)).all() and np.isfinite(multi).all() and (multi>=0).all() and np.allclose(multi.sum(1),1),"Invalid probabilities")
+            check(np.allclose(old["baseline_prediction"].to_numpy(),(train["target_return"]>0).mean()),"Binary prior mismatch")
+            yt=targets(train,fund)
+            check(np.allclose(new.select("prior_short","prior_flat","prior_long").to_numpy(),[(yt==c).mean() for c in (-1,0,1)]),"Multiclass prior mismatch")
+            check(np.array_equal(new["cost_target"].to_numpy(),targets(test,fund)),"Cost label mismatch")
+            out["folds"].append({"fold":fold.fold_id,"train_rows":train.height,"test_rows":test.height})
+            print("integrity fold",fold.fold_id,"pass",flush=True)
+        out["status"]="pass" if out["dataset_hash_matches"] else "review_required"
+    except Exception:out.update(status="fail",error=traceback.format_exc())
+    p=root/"reports"/"44_research_integrity.zip";p.parent.mkdir(parents=True,exist_ok=True)
+    tmp=p.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
+    tmp.replace(p);print(p,out["status"],flush=True)
+    if out["status"]!="pass":raise SystemExit(out.get("error","Dataset hash review required"))
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -158,6 +243,9 @@ def main():
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
+    if args.command=="integrity":
+        if args.root!=Path("data"):p.error("Integrity uses default data root")
+        return integrity()
     # Stable entry point; keep historical modules intact for experiment hashes.
     import subprocess, sys
     commands={
