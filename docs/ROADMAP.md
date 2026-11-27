@@ -466,3 +466,13 @@ git pull origin main
 python research_pipeline.py alt-portfolio
 ```
 Upload data/reports/41_alt_portfolio.zip even if failed.
+
+
+## Checkpoint — Report 41 PASS; static sleeve diversification
+Initial report 41 blocked by source hash path mismatch; funding engine relative path fix 0cf990c and report 40 rescore resolved it. Uploaded 41_alt_portfolio(1).zip inspected: TRX/NEAR mark coverage 28320/20880 minutes, zero affected trades. Standard compounded returns (%) at .25/.5/1 fractions TRX 22.0427/47.2796/107.8081, NEAR 16.1013/32.1149/61.3475; MTM DD (%) TRX 8.9984/17.1430/31.2308, NEAR 12.3742/23.7120/43.4894. At fraction 1 standard Sharpe .64704/.72382, stress return (%) 68.0376/37.7981 and MTM DD 32.3500/45.4628. BTC C01 remains incumbent; TRX/NEAR retain diversification-only priority, not individual tuning. Next Report 42: equal initial capital sleeves BTC alone, BTC+TRX, BTC+NEAR, BTC+TRX+NEAR, no rebalancing, same fraction per sleeve .25/.5/1, common calendar and standard/stress costs. Reuse daily equity and ledgers from reports 35/41, compute correlations, overlap minutes, daily-close drawdown, daily Sharpe, terminal sleeve return contribution. No combined intraday MTM or shared margin modeled; not optimized or independent. Implemented in portfolio_engine.py e61830d and CLI 2b32aa4; runtime unverified. No training, downloads or new Python files.
+
+```cmd
+git pull origin main
+python research_pipeline.py diversification
+```
+Upload data/reports/42_diversification.zip even if failed.
