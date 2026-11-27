@@ -539,6 +539,254 @@ def run(assets):
         tmp.replace(report);print(report,out["status"],flush=True)
     return 0 if out["status"]=="pass" else 1
 
+# M2: frozen specification transfer. No parameter search, no capital constraints.
+TRANSFER_SPEC={"tf":"1h","horizon_hours":4,"delay_minutes":15,"threshold":.70,
+               "C":1.,"seed":42,"features":COLS,"train_days":180,"test_days":30,
+               "min_train_coverage":.90,"costs_bps":COSTS,
+               "universe":"all configured crypto symbols, regardless of prior performance"}
+
+def transfer_dataset(symbol,raw,path):
+    """One hourly feature build. Retain decisions with missing future prices."""
+    if path.exists():return pl.read_parquet(path)
+    bars=[];points=[]
+    for p in raw:
+        f=pl.read_parquet(p).filter(pl.col("open_time").is_between(A,B,closed="left")).sort("open_time")
+        if not f.height:continue
+        t=f["open_time"].to_numpy()
+        require(np.all(t%MIN==0) and np.all(np.diff(t)>0),"Invalid raw timestamps "+str(p))
+        v=f["open"].to_numpy()
+        require(np.isfinite(v).all() and (v>0).all(),"Invalid raw opens "+str(p))
+        bars.append(aggregate(f,"1h"))
+        points.append(f.filter(pl.col("open_time")%H==15*MIN).select("open_time","open"))
+    require(bars and points,"No usable development candles")
+    h=technical(pl.concat(bars).sort("open_time"),H)
+    p=pl.concat(points).sort("open_time")
+    require(p["open_time"].n_unique()==p.height,"Duplicate execution timestamps")
+    h=h.filter(pl.all_horizontal([pl.col(c).is_finite().fill_null(False) for c in BASE_FEATURES]))
+    h=h.with_columns(pl.lit(symbol).alias("symbol"),(pl.col("decision_time")+15*MIN).alias("entry_time"),
+                     (pl.col("decision_time")+15*MIN+4*H).alias("label_end"))
+    for k,n in (("entry_time","entry_price"),("label_end","exit_price")):
+        h=h.join(p.rename({"open_time":k,"open":n}),on=k,how="left",validate="m:1")
+    h=h.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price",*COLS).sort("decision_time")
+    from data_engine import atomic_write
+    atomic_write(h,path)
+    return h
+
+def transfer_fit_fold(frame,fold):
+    # Train eligibility uses only completed historical outcomes. No minimum future test count.
+    train=frame.filter((pl.col("decision_time")>=fold.train_start)&(pl.col("label_end")<fold.test_start)&
+                       pl.col("entry_price").is_not_null()&pl.col("exit_price").is_not_null())
+    test=frame.filter((pl.col("decision_time")>=fold.test_start)&(pl.col("label_end")<fold.test_end))
+    expected=(fold.test_start-fold.train_start)//H-5
+    row={"fold":fold.fold_id,"train_rows":train.height,"expected_train_rows":expected,
+         "test_rows":test.height,"signals":[]}
+    if train.height<TRANSFER_SPEC["min_train_coverage"]*expected:
+        row["status"]="insufficient_historical_coverage";return row
+    if not test.height:
+        row["status"]="no_observed_decisions";return row
+    y=(train["exit_price"].to_numpy()>train["entry_price"].to_numpy()).astype(int)
+    if len(np.unique(y))!=2:
+        row["status"]="single_training_class";return row
+    with threadpool_limits(limits=1):
+        scale=StandardScaler()
+        x=scale.fit_transform(train.select(COLS).to_numpy())
+        p=LogisticRegression(C=1.,max_iter=500,random_state=42).fit(x,y).predict_proba(scale.transform(test.select(COLS).to_numpy()))[:,1]
+    row["status"]="pass"
+    row["signals"]=transfer_extract(test,p,fold.fold_id)
+    return row
+
+def transfer_extract(frame,p,fold_id):
+    require(np.isfinite(p).all() and ((p>=0)&(p<=1)).all(),"Invalid transfer probabilities")
+    v=frame.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price").with_columns(
+        pl.Series("p_long",p),pl.Series("side",np.where(p>=.7,1,np.where(p<=.3,-1,0)))).filter(pl.col("side")!=0)
+    return [{**t,"fold":fold_id} for t in v.iter_rows(named=True)]
+
+def transfer_cached(symbol,paths,folds):
+    require({p.stem for p in paths}=={str(f.fold_id) for f in folds},"Incomplete frozen predictions")
+    by_id={p.stem:p for p in paths};rows=[];signals=[]
+    for f in folds:
+        v=pl.read_parquet(by_id[str(f.fold_id)]).sort("decision_time")
+        require(v.height and v["symbol"].unique().to_list()==[symbol] and v["decision_time"].n_unique()==v.height,"Cached symbol/keys mismatch")
+        require(v["decision_time"].min()>=f.test_start and v["label_end"].max()<f.test_end and
+                ((v["entry_time"]-v["decision_time"])==15*MIN).all() and
+                ((v["label_end"]-v["entry_time"])==4*H).all(),"Cached chronology mismatch")
+        t=transfer_extract(v,v["prediction"].to_numpy(),f.fold_id)
+        signals.extend(t);rows.append({"fold":f.fold_id,"status":"cached","test_rows":v.height,"signals":len(t)})
+    return rows,signals
+
+def transfer_funding(symbol):
+    """Verify local 8h schedule spans, including shorter listed histories.
+    Never extrapolate funding beyond verified spans, or replace missing rates/marks with zero.
+    """
+    if symbol=="BTCUSDT":
+        return load_funding(symbol),[(A,B)]
+    parts=[]
+    for p in monthly(ROOT/"funding"/symbol):
+        x=pl.read_parquet(p).select("event_time","funding_rate","funding_interval_hours")
+        mp=ROOT/"mark"/symbol/p.name
+        if mp.exists():
+            m=pl.read_parquet(mp,columns=["event_time","open"]).rename({"event_time":"minute","open":"mark_price"})
+            x=x.with_columns((pl.col("event_time")//MIN*MIN).alias("minute")).join(m,on="minute",how="left",validate="m:1")
+        else:x=x.with_columns(pl.lit(None,dtype=pl.Float64).alias("mark_price"))
+        parts.append(x.select("event_time","funding_rate","funding_interval_hours","mark_price"))
+    if not parts:return None,[]
+    f=pl.concat(parts).filter(pl.col("event_time").is_between(A,B,closed="left")).sort("event_time")
+    if not f.height:return None,[]
+    ts=f["event_time"].to_numpy()
+    require(len(np.unique(ts))==len(ts),"Duplicate funding events")
+    grid=((ts+MIN//2)//(8*H))*(8*H)
+    good_grid=(np.abs(ts-grid)<=MIN)&(f["funding_interval_hours"].fill_null(-1).to_numpy()==8)
+    spans=[];start=None
+    for i in range(len(ts)-1):
+        if good_grid[i] and good_grid[i+1] and grid[i+1]-grid[i]==8*H:
+            if start is None:start=int(ts[i])
+        elif start is not None:
+            spans.append((start,int(ts[i])));start=None
+    if start is not None:spans.append((start,int(ts[-1])))
+    # Same complete-calendar convention as the original audited 8h engine.
+    if good_grid.all() and np.array_equal(grid,np.arange(A,B,8*H)):spans=[(A,B)]
+    rate=f["funding_rate"].cast(pl.Float64).to_numpy();price=f["mark_price"].cast(pl.Float64).to_numpy()
+    good=np.isfinite(rate)&np.isfinite(price)&(price>0)
+    f=f.with_columns(pl.lit(symbol).alias("symbol")).select("symbol","event_time","funding_rate","mark_price")
+    return (f,ts,np.r_[0.,np.cumsum(np.where(good,rate*price,0.))],np.r_[0,np.cumsum(~good)]),spans
+
+def transfer_score(signals,fund,spans):
+    # Preserve every signal; distinguish unknown price, schedule, and settlement mark.
+    for t in signals:
+        t.update(standard=None,stress=None,fee_slip_standard=None,fee_slip_stress=None,
+                 outcome_status="unknown_price")
+    known=[t for t in signals if all(t[k] is not None and np.isfinite(t[k]) and t[k]>0 for k in ("entry_price","exit_price"))]
+    if not known:return
+    e,z,ep,xp,side=[np.array([t[k] for t in known]) for k in ("entry_time","label_end","entry_price","exit_price","side")]
+    covered=np.array([any(a<=x and y<=b for a,b in spans) for x,y in zip(e,z)],dtype=bool)
+    for (fee,slip),which in zip(COSTS,("standard","stress")):
+        u=ep*(1+side*slip/10000);v=xp*(1-side*slip/10000)
+        pre=side*(v-u)/u-fee/10000*(u+v)/u
+        net=costs(e,z,ep,xp,side,fund,fee,slip) if fund is not None else np.full(len(e),np.nan)
+        net=np.where(covered,net,np.nan)
+        for i,t in enumerate(known):
+            t["fee_slip_"+which]=float(pre[i])
+            t[which]=float(net[i]) if np.isfinite(net[i]) else None
+            t["outcome_status"]="scored" if np.isfinite(net[i]) else ("unknown_funding_event" if covered[i] else "unverified_funding_schedule")
+        valid=[t for t in known if t[which] is not None]
+        if valid:
+            keys=("symbol","entry_time","label_end","entry_price","exit_price","side")
+            frame=pl.DataFrame([{k:t[k] for k in keys} for t in valid])
+            f=fund[0].filter(pl.col("funding_rate").is_finite().fill_null(False)&pl.col("mark_price").is_finite().fill_null(False)&(pl.col("mark_price")>0).fill_null(False))
+            scored=score_trades(frame,fee,slip,f,{valid[0]["symbol"]:spans})
+            require(np.allclose(scored["net_return"].to_numpy(),[t[which] for t in valid],atol=1e-12,rtol=1e-10),"Transfer cost reconciliation")
+
+def transfer_summary(signals,first,last,bootstrap=False):
+    def stats(rows,which,ci_on):
+        v=edge_stats(rows,which,first,last,ci_on)
+        v["unknown_outcomes"]=v.pop("unknown_funding_signals")
+        v.pop("matched_direction_comparator",None)
+        return v
+    result={}
+    for name,rows in (("all_opportunities",signals),("per_symbol_nonoverlap",nonoverlap(signals))):
+        counts={}
+        for t in rows:counts[t["outcome_status"]]=counts.get(t["outcome_status"],0)+1
+        result[name]={"outcome_counts":counts,
+                      "standard":stats(rows,"standard",bootstrap and name=="per_symbol_nonoverlap"),
+                      "stress":stats(rows,"stress",bootstrap and name=="per_symbol_nonoverlap"),
+                      "fee_slip_only_standard":stats(rows,"fee_slip_standard",False),
+                      "fee_slip_only_stress":stats(rows,"fee_slip_stress",False)}
+    return result
+
+def run_transfer(assets):
+    import portalocker
+    started=time.monotonic()
+    root=ROOT/"research_v2"/"transfer";root.mkdir(parents=True,exist_ok=True)
+    report=ROOT/"reports"/"research_transfer.zip";report.parent.mkdir(parents=True,exist_ok=True)
+    out={"protocol":TRANSFER_SPEC,"assets_requested":assets,"assets":[],
+         "scope":"Fixed specification development transfer; historical universe purposive, not survivorship-free. Previously screened negative assets retained. New fits use observed historical coverage, not verified listing dates. No capital constraints, tuning, holdout or downloads. Fee/slippage-only outcomes are NOT funding-adjusted.",
+         "cohorts":{}}
+    all_signals=[]
+    with portalocker.Lock(str(root/"coordinator.lock"),timeout=0):
+        try:
+            memory_preflight("transfer startup")
+            folder,=list((ROOT/"experiments").glob("6823506d*"))
+            require(json.loads((folder/"result.json").read_text())["params"]["C"]==1.,"Frozen C differs from transfer specification")
+            prior=read_report("research_batch.zip")
+            require(set(prior["assets_completed"])==set(ASSETS),"Five-asset batch incomplete")
+            prior_rows={r["symbol"]:r for r in prior["assets"]}
+            oldrows={}
+            attempted=set()
+            for name in ("25_multi_asset_transfer.zip","39_extended_transfer.zip"):
+                for r in read_report(name)["results"]:
+                    attempted.add(r["symbol"])
+                    if r["status"]=="pass":oldrows[r["symbol"]]=r
+            folds=make_folds(A,B,180,30);first,last=folds[0].test_start,folds[-1].test_end
+            out.update(first=first,last=last)
+            source_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py"),Path("validation_protocol.py")])+
+                                      "".join(inspect.getsource(f) for f in (transfer_dataset,transfer_fit_fold,transfer_extract))).encode()).hexdigest()
+            for symbol in assets:
+                row={"symbol":symbol,"cohort":"pilot" if symbol in ASSETS else ("prior_screened" if symbol in attempted else "additional_universe")}
+                out["assets"].append(row)
+                try:
+                    raw=monthly(ROOT/"futures"/symbol/"1m")
+                    if not raw:
+                        row["status"]="no_development_raw";continue
+                    raw_hash=digest(raw);row["raw_hash"]=raw_hash
+                    paths=[]
+                    if symbol=="BTCUSDT" and prior_rows[symbol]["raw_hash"]==raw_hash:
+                        paths=sorted((folder/"predictions").glob("*.parquet"))
+                    elif symbol in oldrows and oldrows[symbol].get("source")==raw_hash:
+                        paths=sorted((ROOT/"multi_asset"/oldrows[symbol]["experiment"]/"predictions").glob("*.parquet"))
+                    if paths and {p.stem for p in paths}=={str(f.fold_id) for f in folds}:
+                        ph=digest(paths)
+                        if symbol in prior_rows:
+                            require(ph==prior_rows[symbol]["baseline_prediction_hash"],"Pilot prediction hash changed")
+                        row.update(mode="frozen_cache",prediction_hash=ph)
+                        row["folds"],signals=transfer_cached(symbol,paths,folds)
+                    else:
+                        row["mode"]="fixed_refit"
+                        key={"symbol":symbol,"raw":raw_hash,"spec":TRANSFER_SPEC,"code":source_code,
+                             "numpy":np.__version__,"polars":pl.__version__,"sklearn":sklearn.__version__}
+                        cache_id=identity(key);row["identity"]=cache_id
+                        cache=root/"datasets"/cache_id/"dataset.parquet"
+                        completed=root/"folds"/cache_id
+                        frame=None;signals=[];row["folds"]=[]
+                        for fold in folds:
+                            if not (completed/(str(fold.fold_id)+".json")).exists() and frame is None:
+                                memory_preflight(symbol+" transfer dataset")
+                                frame=transfer_dataset(symbol,raw,cache)
+                            v=checkpoint(root/"folds",key,fold.fold_id,lambda:transfer_fit_fold(frame,fold))
+                            signals.extend(v["signals"])
+                            row["folds"].append({**{k:x for k,x in v.items() if k!="signals"},"signals":len(v["signals"])})
+                        frame=None
+                    row["signals"]=len(signals)
+                    row["eligible_folds"]=sum(f["status"] in ("pass","cached") for f in row["folds"])
+                    fund,spans=transfer_funding(symbol)
+                    row["verified_funding_spans"]=spans
+                    transfer_score(signals,fund,spans)
+                    row["results"]=transfer_summary(signals,first,last)
+                    row["status"]="pass" if all(t["outcome_status"]=="scored" for t in signals) else "partial_outcomes"
+                    if not row["eligible_folds"]:row["status"]="no_eligible_folds"
+                    all_signals.extend(signals)
+                    print(symbol,row["status"],len(signals),"signals",flush=True)
+                except MemoryError:
+                    row.update(status="blocked_memory",error=traceback.format_exc());break
+                except Exception:
+                    row.update(status="fail",error=traceback.format_exc());print(symbol,"blocked",flush=True)
+                finally:
+                    frame=None;gc.collect()
+            for name in ("pilot","prior_screened","additional_universe","outside_pilot","all"):
+                symbols={r["symbol"] for r in out["assets"] if name=="all" or r["cohort"]==name or (name=="outside_pilot" and r["cohort"]!="pilot")}
+                v=[t for t in all_signals if t["symbol"] in symbols]
+                out["cohorts"][name]={"symbols":sorted(symbols),"results":transfer_summary(v,first,last,True)}
+            out["status"]="pass" if len(out["assets"])==len(assets) and all(r["status"]=="pass" for r in out["assets"]) else "partial"
+        except Exception:out.update(status="fail",error=traceback.format_exc())
+        out["elapsed_seconds"]=time.monotonic()-started
+        tmp=report.with_suffix(".tmp")
+        with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:
+            for name,obj in (("metrics.json",out),("signals.json",all_signals)):
+                with z.open(name,"w") as binary:
+                    with io.TextIOWrapper(binary,encoding="utf-8") as stream:
+                        json.dump(obj,stream,allow_nan=False)
+        tmp.replace(report);print(report,out["status"],flush=True)
+    return 0 if out["status"]=="pass" else 1
+
 if __name__=="__main__":
     import argparse
     p=argparse.ArgumentParser()
