@@ -52,6 +52,12 @@ Upload only data/reports/research_batch.zip once (even if partial/fail); pytest 
 
 ---
 
+## Runtime acceptance — memory correction
+
+User's local pytest: 25 passed, 3 grouped as-of sortedness warnings, 37.05s. Initial batch aborted before training at preflight: 1024 MiB incremental estimate + 1024 MiB reserve. Actual available RAM not printed in original log. Source inspection also found batch parent imported research_engine (ML dependencies) and then spawned a duplicate ML process. Commits 8715b20 and a2195f6 remove duplicate process for batch, use one worker and one Polars thread, estimate 512 MiB additional +512 MiB reserve at startup/dataset and 256 MiB +512 MiB at a new fold when memory is low, print available RAM, pause safely on low memory, and stream detailed fold trials into the same ZIP from existing checkpoints instead of accumulating all trials in RAM. Estimates not measured peaks. Full trial details now in folds/<symbol>/<fold>.json within batch ZIP; metrics retain choices and counts. Search protocol, data/selection identities and previous checkpoints unchanged. No raw repair or retraining required merely for resource changes. Latest runtime not verified. Resume: git pull origin main && python research_pipeline.py batch. If low RAM persists, close unused applications and resume; do not override protection blindly. 
+
+---
+
 ## Superseded shared-wallet proposal (historical design only)
 
 The prior active section proposed shared-wallet replay, fixed five slots and 20% allocations; user explicitly deferred these constraints until after signal-edge discovery. Git history preserves that implementation and documentation; do not run it as the current milestone. Previous source hashes/checkpoints remain intact.
