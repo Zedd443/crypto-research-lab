@@ -58,21 +58,24 @@ def audit_symbol(r,first,last,out):
         out["economics"].append({"fee_bps":fee,"slippage_bps":slip,**metrics(scored,first,last)})
     out["status"]="pass"
 def main():
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument("--extended",action="store_true");args=parser.parse_args()
     out={"scope":"Five positive-primary-cost altcoins, fixed predictions, strict standard 8h funding grid gate, minute-open mark proxy; no dropped trades or retraining; nonstandard schedules require separate verification; exploratory fixed-notional results","results":[]}
+    if args.extended:out["scope"]="TRX and NEAR priority funding audit; frozen report 39 predictions; strict 8h schedule gate; no downloads or retraining; nonstandard schedules require review."
     try:
-        with zipfile.ZipFile(ROOT/"reports"/"25_multi_asset_transfer.zip") as z:report=json.loads(z.read("metrics.json"))
-        assert report["status"]=="pass"
+        with zipfile.ZipFile(ROOT/"reports"/("39_extended_transfer.zip" if args.extended else "25_multi_asset_transfer.zip")) as z:report=json.loads(z.read("metrics.json"))
+        assert report["status"] in (("pass","partial") if args.extended else ("pass",))
         folder,=list((ROOT/"experiments").glob("6823506d*"))
         m=json.loads((folder/"manifest.json").read_text())
         first=m["folds"][0]["test_start"];last=m["folds"][-1]["test_end"]
-        for symbol in SYMBOLS:
+        for symbol in (["TRXUSDT","NEARUSDT"] if args.extended else SYMBOLS):
             row={"symbol":symbol}
             try:audit_symbol(next(r for r in report["results"] if r["symbol"]==symbol),first,last,row)
             except Exception:row.update(status="fail",error=traceback.format_exc())
             out["results"].append(row);print(symbol,row["status"],flush=True)
         out["status"]="pass" if all(r["status"]=="pass" for r in out["results"]) else "partial"
     except Exception:out.update(status="fail",error=traceback.format_exc())
-    p=ROOT/"reports"/"26_multi_asset_funding.zip";p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/("40_extended_funding.zip" if args.extended else "26_multi_asset_funding.zip");p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
