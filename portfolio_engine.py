@@ -107,11 +107,59 @@ def audit(out):
             out["scenarios"].append({"fee_bps":fee,"slippage_bps":slip,"fixed_notional_pnl":float(scored["net_return"].sum()),**result})
             print(fee,slip,frac,"done",flush=True)
 
+def audit_cost_aware(out):
+    """Replay frozen C01/C02 on the same calendar and costs; no retraining."""
+    from funding_repair_engine import apply
+    from cost_aware_target_engine import select, KEYS
+    folder,=list((ROOT/"experiments").glob(PREFIX+"*"))
+    spec=json.loads((folder/"spec.json").read_text())
+    man=json.loads((folder/"manifest.json").read_text())
+    require(identity(spec)==folder.name and spec["manifest_id"]==man["manifest_id"],"Incumbent identity mismatch")
+    with zipfile.ZipFile(ROOT/"reports"/"21_cost_aware_target.zip") as zz:
+        rep=json.loads(zz.read("metrics.json"))
+    require(rep["status"]=="pass","Report 21 failed")
+    oldpaths=sorted((folder/"predictions").glob("*.parquet"))
+    newpaths=sorted((ROOT/"target_v2"/rep["experiment"]).glob("*.parquet"))
+    require([p.name for p in oldpaths]==[p.name for p in newpaths] and len(oldpaths)==42,"Incomplete prediction cache")
+    require({p.stem for p in oldpaths}=={str(f["fold_id"]) for f in man["folds"]},"Fold mismatch")
+    old=pl.read_parquet(oldpaths).sort("decision_time")
+    new=pl.read_parquet(newpaths).sort("decision_time")
+    require(old.select(KEYS).equals(new.select(KEYS)),"Common eligibility mismatch")
+    require(old["decision_time"].n_unique()==old.height and old["symbol"].unique().to_list()==["BTCUSDT"] and old["decision_time"].min()>=A and old["label_end"].max()<B,"Invalid prediction scope")
+    prob=new.select("p_short","p_flat","p_long").to_numpy()
+    require(np.isfinite(prob).all() and (prob>=0).all() and np.allclose(prob.sum(1),1),"Invalid probabilities")
+    fund=apply(ledger(ROOT)).sort("event_time")
+    require(not fund["mark_price"].null_count(),"Incomplete settlement marks")
+    require(hashlib.sha256(fund.write_csv().encode()).hexdigest()==rep["funding_hash"],"Funding changed since training")
+    first=man["folds"][0]["test_start"];last=man["folds"][-1]["test_end"]
+    out.update(first=first,last=last,experiments={"C01":folder.name,"C02":rep["experiment"]},prediction_hashes={name:{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths} for name,paths in [("C01",oldpaths),("C02",newpaths)]},mark_coverage={},scenarios=[])
+    for name,t,n in [("C01",pick(old,"logistic",.7),104),("C02",select(new),63)]:
+        require(t.height==n,"Frozen trade count mismatch")
+        require(np.all(t["entry_time"].to_numpy()[1:]>=t["label_end"].to_numpy()[:-1]),"Overlapping trades")
+        out["mark_coverage"][name]=mark_audit(t)
+    require(all(v["affected_trades"]==0 for v in out["mark_coverage"].values()),"Missing intratrade marks; inspect report for targeted repair")
+    for name,t in [("C01",pick(old,"logistic",.7)),("C02",select(new))]:
+        for fee,slip in [(5,1),(5,3),(10,5)]:
+            scored=score_trades(t,fee,slip,fund,{"BTCUSDT":[(A,B)]})
+            require(scored.height==t.height,"Trade count changed")
+            if (fee,slip)==(5,1):
+                expected=.573242 if name=="C01" else .4352
+                require(np.isclose(scored["net_return"].sum(),expected,atol=.0001),"Frozen P&L mismatch")
+            for frac in (.25,.5,1.):
+                result=replay(scored,fund,frac,first,last,fee/10000)
+                # Keep daily equity and trade ledger, omit redundant minute curves.
+                result.pop("minute_equity")
+                out["scenarios"].append({"candidate":name,"fee_bps":fee,"slippage_bps":slip,"fixed_notional_pnl":float(scored["net_return"].sum()),**result})
+                print(name,fee,slip,frac,"done",flush=True)
+
 def main():
+    import argparse
+    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare'],default='incumbent');args=p.parse_args()
     out={"scope":"Development diagnostic, fixed fractions not optimized; minute-open marks, actual assumed funding boundary (entry,exit], no liquidation or margin tiers; no intra-minute extrema or executable mark fills."}
-    try:audit(out);out["status"]="pass"
+    try:
+        (audit_cost_aware if args.candidate=="compare" else audit)(out);out["status"]="pass"
     except Exception:out["status"]="fail";out["error"]=traceback.format_exc()
-    p=ROOT/"reports"/"10_portfolio.zip";p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/("35_candidate_portfolio.zip" if args.candidate=="compare" else "10_portfolio.zip");p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
