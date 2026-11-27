@@ -426,3 +426,13 @@ git pull origin main
 python research_pipeline.py time-exit
 ```
 Upload data/reports/36_time_exit.zip even if failed.
+
+
+## Checkpoint — Report 36 PASS; retain 4h baseline
+36_time_exit.zip inspected: C01 120/180/240m primary expectancy (%) .343197/.389682/.551195, PF 1.91735/1.81705/2.32961, compounded return (%) 40.73674/47.01195/74.03352, MTM DD (%) 6.36830/10.51520/12.79002, Sharpe .98740/1.04938/1.59919; stress return (%) 16.71944/21.93658/44.36823. C02 corresponding expectancy (%) .523778/.523823/.690801, PF 2.35780/2.15953/2.80220, return (%) 37.41547/37.14455/52.46708, DD (%) 6.66905/10.51520/12.79002, Sharpe .97700/.97104/1.42300; stress return (%) 22.68933/22.44221/36.13117. Same 104/63 entries. Park shorter unconditional exits for tuning; retain as lower-DD alternatives, not evidence against retrained shorter targets. Next Report 37 early invalidation: two fixed checkpoint alternatives 60/120m after entry, if signed gross return at checkpoint minute open <=0, exit at next minute open; otherwise original 240m exit. Fixed original entries, no re-entry, no training, same cost scenarios and common calendar; mark coverage and 240m baseline reconciliation. Exploratory choices motivated by report 23; no independent validation. Existing portfolio_engine.py (58121fc) and unified CLI (eb68efd), runtime unverified. No downloads, new Python files or holdout. After report 37, close initial exit screening unless material evidence, then OBV/filter technical benchmark.
+
+```cmd
+git pull origin main
+python research_pipeline.py early-invalidation
+```
+Upload data/reports/37_early_invalidation.zip even if failed.
