@@ -3,7 +3,7 @@ Historical experiment scripts remain intact. One batch report per protocol.
 """
 import os
 os.environ.setdefault("POLARS_MAX_THREADS","1")
-import json, zipfile, traceback, hashlib, time, inspect, gc, io
+import json, zipfile, traceback, hashlib, time, inspect, gc
 import psutil
 from pathlib import Path
 from datetime import datetime, timezone
@@ -52,7 +52,58 @@ def require(ok,msg):
     if not ok:raise ValueError(msg)
 
 def read_report(name):
-    with zipfile.ZipFile(ROOT/"reports"/name) as z:return json.loads(z.read("metrics.json"))
+    path=ROOT/"reports"/name
+    # Current batch writes standalone JSON; old archives remain readable.
+    if path.stem in ("research_batch","research_transfer","research_temporal"):
+        current=path.with_suffix(".json")
+        if current.exists():return json.loads(current.read_text(encoding="utf-8"))
+    with zipfile.ZipFile(path) as z:return json.loads(z.read("metrics.json"))
+
+def stream_json(path,obj):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix(".json.tmp")
+    with tmp.open("w",encoding="utf-8") as f:
+        json.dump(obj,f,allow_nan=False,separators=(",",":"))
+    tmp.replace(path)
+
+def publish_report(report,root,out,signals):
+    """Small handoff: console summary + metrics JSON; detailed local evidence retained."""
+    ledger=root/"signals.json"
+    stream_json(ledger,signals)
+    out["local_signal_ledger"]=str(ledger)
+    stream_json(report,out)
+    def pct(v):
+        return "n/a" if v is None else f"{100*v:+.4f}%"
+    def line(name,std,stress):
+        interval=next((b["interval"] for b in std.get("bootstrap_nominal",[]) if b["block_days"]==30),None)
+        ci_text=f" CI30=[{pct(interval[0])},{pct(interval[1])}]" if interval is not None else ""
+        print(f"{name}: scored={std['scored_signals']}/{std['signals']} net={pct(std.get('expectancy'))} stress={pct(stress.get('expectancy'))}{ci_text}",flush=True)
+    print("\n=== RESEARCH SUMMARY (nonoverlap; conditional on known outcomes) ===",flush=True)
+    print(f"status={out['status']} elapsed={out.get('elapsed_seconds',0):.1f}s assets={len(out.get('assets',[]))}/{len(out.get('assets_requested',[]))}",flush=True)
+    if "cohorts" in out:
+        for name in ("pilot","outside_pilot","all"):
+            if name not in out["cohorts"]:continue
+            v=out["cohorts"][name]["results"]["per_symbol_nonoverlap"]
+            line(name,v["standard"],v["stress"])
+        for year,groups in out.get("calendar_years",{}).items():
+            if "pilot" in groups:
+                v=groups["pilot"]["per_symbol_nonoverlap"];line("pilot "+year,v["standard"],v["stress"])
+        for row in out.get("assets",[]):
+            v=row.get("results",{}).get("per_symbol_nonoverlap")
+            if v:line(row["symbol"]+" "+row["status"],v["standard"],v["stress"])
+    else:
+        grouped={}
+        for row in out.get("edge_results",[]):
+            v=row.get("per_symbol_nonoverlap",{}).get("overall")
+            if v:grouped.setdefault(row["strategy"],{})[(row["fee_bps"],row["slippage_bps"])]=v
+        for name,v in grouped.items():
+            if all(c in v for c in COSTS):line(name,v[COSTS[0]],v[COSTS[1]])
+    for row in [out,*out.get("assets",[]),*out.get("edge_results",[])]:
+        err=row.get("error") or row.get("funding_error")
+        if err:print(row.get("symbol",row.get("strategy","batch"))+": "+err.strip().splitlines()[-1],flush=True)
+    print("Metrics:",report,flush=True)
+    print("Detailed signals retained locally:",ledger,flush=True)
+
 
 def monthly(directory):
     return [p for p in sorted(directory.glob("*.parquet")) if "2021-01"<=p.stem<="2024-12"]
@@ -433,8 +484,8 @@ def run(assets):
     started=time.monotonic()
     root=ROOT/"research_v2";root.mkdir(parents=True,exist_ok=True)
     out={"protocol":SPEC,"assets_requested":assets,"scope":"Nested historical signal-edge search, not independent holdout. No shared-wallet allocation, capital limits or live orders. Five-asset default is a readiness pilot, not a survivorship-free universe.","assets":[],"edge_results":[]}
-    report=ROOT/"reports"/"research_batch.zip";report.parent.mkdir(parents=True,exist_ok=True)
-    signal_ledger={};fold_artifacts=[]
+    report=ROOT/"reports"/"research_batch.json";report.parent.mkdir(parents=True,exist_ok=True)
+    signal_ledger={}
     with portalocker.Lock(str(root/"coordinator.lock"),timeout=0):
         try:
             memory_preflight("startup")
@@ -495,8 +546,7 @@ def run(assets):
                             if psutil.virtual_memory().available<768*1024**2:
                                 gc.collect();memory_preflight(symbol+" fold "+str(fold.fold_id),256)
                         result=checkpoint(root/"folds",key,fold.fold_id,lambda:search_fold(symbol,ds,fold,fit_baseline))
-                        detail_name=f"folds/{symbol}/{fold.fold_id}.json"
-                        fold_artifacts.append((fold_path,detail_name))
+                        detail_name=str(fold_path)
                         signals.extend(result["signals"]);base.extend(result["baseline"])
                         for m in families:family_rows[m].extend(result["family_signals"][m])
                         row["folds"].append({**{k:v for k,v in result.items() if k not in ("signals","family_signals","baseline","trials")},"trial_count":len(result["trials"]),"detail_file":detail_name,"outer_signals":len(result["signals"]),"family_outer_signals":{m:len(v) for m,v in result["family_signals"].items()},"new_baseline_signals":len(result["baseline"])})
@@ -528,16 +578,7 @@ def run(assets):
             out["status"]="pass" if len(funds)==len(assets) and all(r["status"]=="pass" for r in out["assets"]+out["edge_results"]) else "partial"
         except Exception:out.update(status="fail",error=traceback.format_exc())
         out["elapsed_seconds"]=time.monotonic()-started
-        tmp=report.with_suffix(".tmp")
-        with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:
-            # Stream large details from existing checkpoints; do not retain all trial dicts
-            # in RAM or construct a single large JSON string for signal exports.
-            for path,name in fold_artifacts:z.write(path,name)
-            for name,obj in (("metrics.json",out),("signals.json",signal_ledger)):
-                with z.open(name,"w") as binary:
-                    with io.TextIOWrapper(binary,encoding="utf-8") as stream:
-                        json.dump(obj,stream,allow_nan=False)
-        tmp.replace(report);print(report,out["status"],flush=True)
+        publish_report(report,root,out,signal_ledger)
     return 0 if out["status"]=="pass" else 1
 
 # M2: frozen specification transfer. No parameter search, no capital constraints.
@@ -711,7 +752,7 @@ def run_transfer(assets,temporal=False):
     from data_engine import ms,date
     phase="temporal" if temporal else "transfer"
     root=ROOT/"research_v2"/phase;root.mkdir(parents=True,exist_ok=True)
-    report=ROOT/"reports"/("research_"+phase+".zip");report.parent.mkdir(parents=True,exist_ok=True)
+    report=ROOT/"reports"/("research_"+phase+".json");report.parent.mkdir(parents=True,exist_ok=True)
     raw_start=ms(date("2024-06-01")) if temporal else A
     raw_end=ms(date("2026-11-01")) if temporal else B
     out={"protocol":TRANSFER_SPEC,"assets_requested":assets,"assets":[],
@@ -822,13 +863,7 @@ def run_transfer(assets,temporal=False):
             out["status"]="pass" if len(out["assets"])==len(assets) and all(r["status"]=="pass" for r in out["assets"]) else "partial"
         except Exception:out.update(status="fail",error=traceback.format_exc())
         out["elapsed_seconds"]=time.monotonic()-started
-        tmp=report.with_suffix(".tmp")
-        with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:
-            for name,obj in (("metrics.json",out),("signals.json",all_signals)):
-                with z.open(name,"w") as binary:
-                    with io.TextIOWrapper(binary,encoding="utf-8") as stream:
-                        json.dump(obj,stream,allow_nan=False)
-        tmp.replace(report);print(report,out["status"],flush=True)
+        publish_report(report,root,out,all_signals)
     return 0 if out["status"]=="pass" else 1
 
 if __name__=="__main__":
