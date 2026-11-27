@@ -148,7 +148,7 @@ def run_symbol(task):
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -158,6 +158,20 @@ def main():
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
+    # Stable entry point; keep historical modules intact for experiment hashes.
+    import subprocess, sys
+    commands={
+        "coverage": ["post_repair_coverage_engine.py","--root",str(args.root)],
+        "invalid-candles": ["invalid_candle_audit.py"],
+        "repair-funding": ["funding_repair_engine.py"],
+        "repair-marks": ["mark_repair_engine.py"],
+        "repair-channel-marks": ["channel_mark_repair_engine.py"],
+        "candidate-portfolio": ["portfolio_engine.py","--candidate","compare"],
+    }
+    if args.command in commands:
+        if args.command!="coverage" and args.root!=Path("data"):
+            p.error("This historical engine requires the default data root")
+        raise SystemExit(subprocess.call([sys.executable,*commands[args.command]]))
     start,end=de.date(args.start),de.date(args.end)
     if start>=end:p.error("start must precede end")
     symbols=list(dict.fromkeys(args.symbols))
