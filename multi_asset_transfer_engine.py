@@ -51,7 +51,7 @@ def evaluate(f,first,last):
         m=metrics(scored,first,last);m.pop("funding",None)
         results.append({"fee_bps":fee,"slippage_bps":slip,**m})
     return {"oos_rows":f.height,"brier":float(np.mean((p-y)**2)),"naive_brier":float(np.mean((f["baseline_prediction"].to_numpy()-y)**2)),"DA":float(np.mean((p>=.5)==y)),"fee_slip_only":results}
-def audit(out):
+def audit(out, extended=False):
     folder,=list((ROOT/"experiments").glob("6823506d*"))
     spec=json.loads((folder/"spec.json").read_text());man=json.loads((folder/"manifest.json").read_text())
     assert identity(spec)==folder.name and spec["manifest_id"]==man["manifest_id"]
@@ -63,7 +63,7 @@ def audit(out):
     out["results"]=[]
     btc=pl.read_parquet(sorted((folder/"predictions").glob("*.parquet"))).sort("decision_time")
     out["results"].append({"symbol":"BTCUSDT","status":"pass","experiment":folder.name,**evaluate(btc,first,last)})
-    for symbol in SYMBOLS:
+    for symbol in (["SOLUSDT","TRXUSDT","LTCUSDT","NEARUSDT","AAVEUSDT","FILUSDT","WAVESUSDT","OMGUSDT"] if extended else SYMBOLS):
         try:
             raw=[p for p in sorted((ROOT/"futures"/symbol/"1m").glob("*.parquet")) if "2021-01"<=p.stem<="2024-12"]
             assert len(raw)==48
@@ -88,10 +88,12 @@ def audit(out):
         except Exception:out["results"].append({"symbol":symbol,"status":"fail","error":traceback.format_exc()});print(symbol,"failed",flush=True)
     out["status"]="pass" if all(r["status"]=="pass" for r in out["results"]) else "partial"
 def main():
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument("--extended",action="store_true");args=parser.parse_args()
     out={"scope":"Independent per-symbol retraining of frozen BTC specification, not zero-shot model transfer; same chronological folds, 15m delay, 4h horizon, .70 threshold; no funding in preliminary economics, not fully net results; no holdout or tuning. Full-window universe selection bias."}
-    try:audit(out)
+    try:audit(out,args.extended)
     except Exception:out.update(status="fail",error=traceback.format_exc())
-    p=ROOT/"reports"/"25_multi_asset_transfer.zip";p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/("39_extended_transfer.zip" if args.extended else "25_multi_asset_transfer.zip");p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
