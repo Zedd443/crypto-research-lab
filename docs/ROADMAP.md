@@ -16,7 +16,7 @@
 | M0 | Existing data infrastructure, evidence retention and pilot integrity | Sufficient for existing pilot; broader coverage incomplete |
 | M1 | Joint signal-edge search: timeframe, target horizon, exit, threshold and regularization | Completed; fixed control beat adaptive protocols |
 | M2 | Generalization across assets and robustness | 30-contract fixed transfer completed; broad edge not supported; full point-in-time universe and alternative families remain unexhausted |
-| M3 | Freeze signal protocol; genuinely unseen evaluation or disclose prior exposure; forward signal validation | Later-period historical falsification active; genuinely prospective evidence still pending |
+| M3 | Freeze signal protocol; genuinely unseen evaluation or disclose prior exposure; forward signal validation | C01 later-period falsification completed; C01 parked; prospective evidence still pending |
 | M4 | Separate risk management/smart allocation research using saved validated signals; shared portfolio, sizing, exposure, margin, fees, order execution and paper trading | Deferred |
 | M5 | Live-readiness decision after independent validation and execution/risk gates | Pending; no live orders |
 
@@ -102,6 +102,14 @@ git pull origin main && python -m pytest -q tests/test_research_components.py -k
 ```
 
 Upload only data/reports/research_temporal.zip. Implementation commits 6cd90ba, d43569e, 62717ac, f90ecd4. New temporal runtime/tests pending. Earlier individual commands are historical; this is active.
+
+---
+
+## Latest decision — temporal evidence and lighter reporting
+
+Directly inspected uploaded research_temporal.zip: archive integrity good, 22 folds, 29.485 seconds, all five pilot assets passed with all 15,752 expected evaluation rows each. Period 2025-01-01 to 2026-10-23 exclusive, later historical data not certified unseen. Pilot nonoverlap 213/213 scored, standard expectancy -0.0430772%, stress -0.2232590%, nominal 30-day CI standard [-0.2815126%, +0.2585605%], stress [-0.4615437%, +0.0780212%]. Pilot 2025 147 signals +0.0223768% standard / -0.1577954% stress; 2026 66 signals -0.1888611% / -0.3690641%. Full universe 448/598 scored, standard -0.3759730%, stress -0.5558535%; outside pilot 235/385 scored, -0.6777041% / -0.8573116%. 150 missing verified funding outcomes in outside-pilot cohort; full-universe net results conditional. No evidence of persistent C01 edge in preselected pilot. Park C01 fixed configuration and previous adaptive search, not all ML. Do not retune on this evaluation period or promote individual later-period winners. M3 falsification did not pass economic gate; M4/M5 remain deferred. Return to distinct economically motivated hypotheses in signal discovery; do not repeat completed temporal test. No new experiment commissioned by this reporting-only revision.
+
+User requested less manual file transfer. Current batch search/transfer/temporal write standalone metrics JSON in data/reports and a concise terminal summary; detailed signal ledger and fold checkpoints stay local, with paths recorded. Existing ZIP readers support legacy archives and prefer current standalone JSON for those three batch report names. Do not request full ZIP by default; terminal summary suffices for routine decisions, metrics JSON if more detail is needed, detailed evidence only when necessary. No old archive deleted and no model search or data changes in reporting revision 23cdc3a. Reporting compatibility test added fc9aead; runtime pending. No command to repeat the completed experiment; pull changes with next experiment.
 
 ---
 
