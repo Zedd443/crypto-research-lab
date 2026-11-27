@@ -1,41 +1,49 @@
-# Active production-oriented research roadmap — 27 November 2026
+# Active signal-first research roadmap — 27 November 2026
 
-**This section supersedes all individual next-step commands below.** Historical checkpoints remain evidence and must not be rerun merely because the code was reorganized. Objective: a robust, cost-aware, shared-capital Binance USD-M system, not maximizing trades per symbol or the number of reports.
+**This section supersedes all historical next-step commands below.** User clarified that the 100-coin example was intended to refute low trade frequency as a disadvantage of BTC, not request capital allocation research now. Primary objective: discover and validate net signal edge across Binance USD-M assets. No shared wallet, maximum positions, sizing, smart allocation or leverage optimization during signal discovery.
 
-## Current decision
+## Current decisions
 
-Reports 44/45 passed integrity/reproducibility for C01/C02. Report 47 was re-read from its uploaded ZIP: common 25,775 observations per candidate; calibration improves Brier/log loss but at unchanged .70 threshold reduces C01 trades 103→13, primary fixed P&L .564898→.006188, and C02 trades 62→38, P&L .426860→.279720. Park that calibration configuration. No repeated diagnostics of frozen candidates without a material new question. C01/C02 remain exploratory controls, C03 Channel100 non-ML comparator retained; no final edge, independent holdout or optimal portfolio claim.
+- C01/C02 remain exploratory controls; integrity/reproducibility passed in prior reports. Report 47 fixed-.70 temperature calibration parked; not evidence against all calibration methods. C03 Channel100 remains a non-ML comparator. No independent holdout or proven live edge.
+- Do not eliminate a signal family because trades per coin per month are low. Evaluate per-signal economics, consistency, uncertainty and cross-asset generalization. Record frequency, not a frequency quota. Cross-asset simultaneous opportunities are all retained.
+- Separate overlapping signal observations from a within-symbol nonoverlap diagnostic to avoid overstating independent evidence. Do not constrain one coin because another coin has an open position.
+- Consolidated entry point and existing historical files remain intact for hashes/checkpoints. No new Python file for each parameter, no report-per-experiment handoff. Only targeted data recovery as justified; no bulk repair.
 
-Source review: 48 root Python files before consolidation; README was outdated; BTC-specific delay/target scripts and single-experiment commands generated redundant manual work. Historical files retained (some are imported or included in original experiment hashes). One cohesive research_engine.py introduced; not a physical deletion or rewrite of old code. User-facing workflow consolidated.
-
-## Milestones (no report-per-experiment handoff)
+## Milestones
 
 | Milestone | Deliverable | Status |
 |---|---|---|
-| M0 | Data, model/technical screening, BTC pilot integrity, reproduction, evidence retention | Sufficient for existing pilot, broader universe/calendar incomplete |
-| M1 | Joint strategy/parameter search + shared-wallet comparison | Implemented, runtime/tests pending |
-| M2 | Expand only promising families and point-in-time eligible assets; alternative technical/cross-sectional/liquidity hypotheses as justified; portfolio-level parameter stability and selection-bias controls | Pending |
-| M3 | Freeze protocol and candidate; genuinely unseen evaluation or disclose prior exposure; forward paper trading on actual available signals | Pending |
-| M4 | Production execution integration: exchange filters, margin tiers, sizing, fees, latency, funding, position/order reconciliation, risk controls, monitoring, recovery, dry run | Pending |
-| M5 | Live-readiness decision based on independent evidence and paper execution; no live orders until explicitly approved and risk gates met | Pending |
+| M0 | Existing data infrastructure, evidence retention and pilot integrity | Sufficient for existing pilot; broader coverage incomplete |
+| M1 | Joint signal-edge search: timeframe, target horizon, exit, threshold and regularization | Implemented; runtime/tests pending |
+| M2 | Generalization across point-in-time eligible assets, remaining evidence-backed ML/non-ML families, parameter stability and multiple-testing controls | Pending |
+| M3 | Freeze signal protocol; genuinely unseen evaluation or disclose prior exposure; forward signal validation | Pending |
+| M4 | Separate risk management/smart allocation research using saved validated signals; shared portfolio, sizing, exposure, margin, fees, order execution and paper trading | Deferred |
+| M5 | Live-readiness decision after independent validation and execution/risk gates | Pending; no live orders |
 
-M1 uses existing 2021–24 raw/funding/mark datasets, 42 rolling outer folds. Default BTC/ETH/BNB/TRX/NEAR pilot; `--symbols` accepts known crypto subset, full raw grid and strict 8h schedule required initially. Dynamic listing/delisting eligibility and broader universe (potentially 100+ contracts) require M2; do not assume all coins replicate BTC signal rate/quality. Existing frozen binary predictions reused where available; otherwise fixed binary baseline fitted once per fold. Initial search includes 30m/1h/4h TF × 1/4/8/24h target horizon × binary/cost-aware logistic, coarse C=1; refine best inner family C=.1/10. Threshold .55/.60/.65/.70 × fixed exit/half-horizon signed nonpositive return invalidation at next minute open. 15m entry delay, 180d train, 120d inner fit + 60d inner validation, 30d outer, actual label-end purge. Train known-cost sample only; evaluate all opportunities chronologically, unknown funding blocks affected selected evaluation, not an entry filter. Select positive primary/stress inner P&L with at least five trades and highest stress daily fixed-notional Sharpe, otherwise cash. Fits reused across threshold/exit scenarios; target horizon refit necessary. This is bounded hierarchical search, not exhaustive Optuna or joint portfolio-optimal selection. Other models/feature sets/windows/delays and rule families are deferred, not declared worthless.
+## M1 active batch
 
-Compare fixed binary vs nested selected strategies under identical shared-wallet constraints, standard/stress costs. Entry-time allocation ranked by past inner score (fixed baseline deterministic symbol tie break); no future outcome ranking. One normalized equity, one position per symbol, max 5 slots, target 20% equity entry notional, 95% entry gross reservation cap, minimum 5% partial allocation. Fixed policy is a test assumption, not an optimized or live leverage policy. Minute-open MTM, peak exposure and reserve, rejected signals, cash/cost reconciliation, daily equity/Sharpe. Margin tiers/liquidation, bid/ask depth, minimum lot/notional, intraminute risk and production order lifecycle not modeled. If missing funding or mark windows affect accepted trades, block replay and report exact evidence instead of dropping trades. No automatic network repair. Pilot may return partial; don't generalize results from surviving subset.
+Default BTC/ETH/BNB/TRX/NEAR pilot; optional --symbols accepts known crypto subsets. Current full development raw grid and verified 8h funding schedule required; dynamic listing-aware universe expansion remains M2. No automatic downloads. Use frozen binary predictions where available and fit fixed baseline only where no historical comparator exists. Initial bounded search: 30m/1h/4h features × 1/4/8/24h prediction horizon × binary/cost-aware logistic; C=1 coarse then .1/10 on best inner family; thresholds .55/.60/.65/.70 × fixed hold or half-horizon invalidation (exit next minute open). 15m entry delay, 180d rolling train, 120d inner fit and 60d inner validation, 30d outer test; purge by full actual target label end. Same predictions reused for threshold/exit variants. Search is not exhaustive or global optimal; other families/features/delays/windows deferred until evidence supports testing.
 
-One sequential coordinator, resource preflight, persistent raw feature cache and per-symbol/fold checkpoints, separate model identity from wallet-only mark/allocation inputs (funding-label changes legitimately require refits). No original checkpoint overwrites, no holdout reads. Existing tests augmented for vectorized funding boundary and shared wallet capacity; local runtime not yet verified. One batch ZIP contains search decisions, tested configurations, completed/blocked assets, portfolio metrics, ledgers, source identity and errors. No manual ZIP uploads between subexperiments. Future expansion should reuse this interface, not add one-off scripts. Physical archival of legacy files only after tested dependency/hash migration.
+Inner selection evaluates chronological nonoverlap opportunities within a symbol (flat at decision timestamp), positive mean net return under both standard and stress costs. No hard minimum trade count or frequency objective. Rank stress expectancy shrunk toward zero by ten zero-return pseudo-observations to account heuristically for sparse evidence; this is an initial design choice, not a statistical significance test. Abstain when no eligible candidate. If inner selected outcomes have unknown funding, mark configuration unscorable, not economically negative. All qualifying outer signals retained in signals.json with probabilities, configuration, timestamps, prices and net returns. No future outcomes used as entry filters. Standard (5bp fee + 1bp slippage each side) and stress (10bp + 5bp) plus funding. Missing settlement marks leave affected outcomes unscored; disclose coverage and conditional known-only metrics, status partial. Intratrade mark-price audit/replay not required for signal discovery.
 
-### Active command
+Report metrics for every qualifying opportunity and separately per-symbol nonoverlap; per-asset, side, fold, signal-weighted and equal-symbol expectancy; trade count, win rate, PF, fixed-unit return sum, nominal 7/30-day calendar-block bootstrap for pooled nonoverlap outcomes. No independent observations claim, no compounded portfolio return, no multiple-testing adjustment yet. Historical development is repeatedly explored. No holdout access. Future smart allocation can consume saved signal ledger without refitting merely to impose capital constraints.
+
+Sequential coordinator, cached raw-derived features, persistent per-symbol/fold checkpoints, identity and independent cost arithmetic checks. Prior standalone files unchanged. Previous batch wallet implementation superseded; no extra Python file introduced for this scope correction. Changing inner objective changes selection identity and legitimately requires a new search if old batch already ran; base dataset cache and historical experiments remain reusable. Tests updated to assert all 100 simultaneous cross-symbol signals retained and unknown funding disclosed. Local tests/runtime pending.
+
+### Active command (Windows CMD)
 
 ```cmd
 git pull origin main
-python -m pytest -q
-python research_pipeline.py batch
+python -m pytest -q && python research_pipeline.py batch
 ```
 
-Upload only `data/reports/research_batch.zip` after the batch, even if partial/fail. If test gate fails, send terminal error. Repeat same command to resume. Read README for source map. Implementation commits: 6e55d16, fc2789c, cadf9cc, 10c7b95, 06b6f52, 0288b53, 26e3f50; README 6734aef. User-requested consolidation and production orientation; all numerical search/wallet assumptions are initial research design choices, not user-approved live risk settings.
+Upload only data/reports/research_batch.zip after batch (pass/partial/fail). If pytest fails, send terminal error. Repeat command to resume compatible checkpoints. Source changes db56c49, b7c04b8, 0347f66.
 
 ---
+
+## Superseded shared-wallet proposal (historical design only)
+
+The prior active section proposed shared-wallet replay, fixed five slots and 20% allocations; user explicitly deferred these constraints until after signal-edge discovery. Git history preserves that implementation and documentation; do not run it as the current milestone. Previous source hashes/checkpoints remain intact.
 
 ## Historical roadmap and evidence (inactive commands)
 
