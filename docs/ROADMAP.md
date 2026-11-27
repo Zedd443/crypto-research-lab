@@ -436,3 +436,13 @@ git pull origin main
 python research_pipeline.py early-invalidation
 ```
 Upload data/reports/37_early_invalidation.zip even if failed.
+
+
+## Checkpoint — reports 37–38; incremental transfer
+Report 37 earlier user conversation: early invalidation 60/120m inferior to original 4h for C01/C02; retain 4h and park tested exit rules. Report 38 inspected directly: OBV20/100 and filter1%/2% each 6047 trades, zero unknown funding exclusions; standard net expectancy (%) -.113417/-.088475/-.095020/-.113219, PF .740494/.790320/.777480/.740327; stress expectancy (%) -.293453/-.268517/-.275051/-.293247. C01 reconciles 104 trades, +.551195% expectancy, PF 2.329612, fixed P&L 57.324242%. These are fixed 4h direction adaptations, not stateful execution or exact Deprez & Frömmel replication. Park four tested configurations, retain stateful OBV/filter as deferred hypothesis. Next Report 39 incremental independent per-symbol retraining of frozen C01 on SOL/TRX/LTC/NEAR/AAVE/FIL/WAVES/OMG, subject to full-grid assertions and local data. Existing transfer engine (cfde280) and CLI (1ec3140), no new Python files; original nine altcoin fits not rerun. BTC cached comparator; same 42 folds, 11 technical features, 1h/4h/15m, C and seed, .70 threshold. Sequential processing and fold checkpoints. Preliminary fee/slippage-only economics; no funding or mark repair until screening supports it. Listing/delisting verification pending; full-window selection bias; no holdout/tuning. Source code changes alter new experiment hashes; existing caches remain intact. Runtime unverified.
+
+```cmd
+git pull origin main
+python research_pipeline.py extended-transfer
+```
+Upload data/reports/39_extended_transfer.zip even if partial or failed.
