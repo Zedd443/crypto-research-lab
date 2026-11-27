@@ -446,7 +446,8 @@ def main():
         import subprocess,sys
         from research_engine import ASSETS
         symbols=ASSETS if args.symbols==SYMBOLS else list(dict.fromkeys(args.symbols))
-        if not set(symbols).issubset(ASSETS):p.error("Batch readiness pilot supports "+", ".join(ASSETS))
+        from universe import CRYPTO_SYMBOLS
+        if not set(symbols).issubset(CRYPTO_SYMBOLS):p.error("Batch supports crypto contracts only; listing-aware TradFi not yet supported")
         raise SystemExit(subprocess.call([sys.executable,"research_engine.py","--symbols",*symbols],env={**os.environ,"POLARS_MAX_THREADS":"1"}))
     if args.command=="calibration":
         if args.root!=Path("data"):p.error("Calibration uses default data root")
