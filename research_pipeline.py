@@ -231,9 +231,70 @@ def integrity():
     tmp.replace(p);print(p,out["status"],flush=True)
     if out["status"]!="pass":raise SystemExit(out.get("error","Dataset hash review required"))
 
+def reproduce():
+    """Refit frozen specifications only, compare against original predictions."""
+    import zipfile,traceback,hashlib
+    import numpy as np
+    import sklearn
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    from threadpoolctl import threadpool_limits
+    from baseline_engine import files,load_fold,digest
+    from validation_protocol import Fold
+    from experiment_store import identity
+    from cost_aware_target_engine import targets,KEYS
+    from funding_repair_engine import apply
+    from robustness_engine import A,B,ledger
+    root=Path("data")
+    out={"scope":"Deterministic refit audit of existing configurations; not tuning or independent validation","folds":[]}
+    def check(ok,msg):
+        if not ok:raise ValueError(msg)
+    def read(n):
+        with zipfile.ZipFile(root/"reports"/n) as z:return json.loads(z.read("metrics.json"))
+    try:
+        gate=read("44_research_integrity.zip");rep=read("21_cost_aware_target.zip")
+        check(gate["status"]==rep["status"]=="pass","Prior gate failed")
+        folder,=list((root/"experiments").glob("6823506d*"))
+        spec=json.loads((folder/"spec.json").read_text());man=json.loads((folder/"manifest.json").read_text())
+        params=json.loads((folder/"result.json").read_text())["params"]
+        check(identity(spec)==folder.name and spec["manifest_id"]==man["manifest_id"],"Identity mismatch")
+        check(spec["sklearn"]==sklearn.__version__ and spec["polars"]==pl.__version__,"Library version mismatch")
+        pairs=[(p,q) for p,q in files(root,["BTCUSDT"],"1h",4,15) if "2021-01"<=p.stem<="2024-12"]
+        check(digest([p for pair in pairs for p in pair])==man["dataset_id"]==gate["current_dataset_hash"],"Dataset hash mismatch")
+        fund=apply(ledger(root)).sort("event_time")
+        check(hashlib.sha256(fund.write_csv().encode()).hexdigest()==rep["funding_hash"],"Funding hash mismatch")
+        for fd in man["folds"]:
+            fold=Fold(**fd);train,test=load_fold(pairs,spec["features"],fold)
+            old=pl.read_parquet(folder/"predictions"/(str(fold.fold_id)+".parquet"))
+            new=pl.read_parquet(root/"target_v2"/rep["experiment"]/(str(fold.fold_id)+".parquet"))
+            check(old.select(KEYS).equals(test.select(KEYS)) and new.select(KEYS).equals(old.select(KEYS)),"Eligibility mismatch")
+            imp=SimpleImputer(strategy="median",add_indicator=True,keep_empty_features=True)
+            x=imp.fit_transform(train.select(spec["features"]).to_numpy());v=imp.transform(test.select(spec["features"]).to_numpy())
+            scale=StandardScaler()
+            with threadpool_limits(limits=spec["threads"]):
+                x=scale.fit_transform(x);v=scale.transform(v)
+                model=LogisticRegression(C=params["C"],max_iter=500,random_state=spec["seed"]).fit(x,(train["target_return"].to_numpy()>0).astype(int))
+                p=model.predict_proba(v)[:,1]
+            with threadpool_limits(limits=1):
+                model=LogisticRegression(C=params["C"],max_iter=500,random_state=spec["seed"]).fit(x,targets(train,fund))
+                q=model.predict_proba(v)
+            op=old["prediction"].to_numpy();oq=new.select("p_short","p_flat","p_long").to_numpy()
+            side=lambda a:np.where(a>=.7,1,np.where(a<=.3,-1,0))
+            multi=lambda a:np.where(a[:,2]>=.7,1,np.where(a[:,0]>=.7,-1,0))
+            row={"fold":fold.fold_id,"binary_max_abs_error":float(np.max(np.abs(p-op))),"multiclass_max_abs_error":float(np.max(np.abs(q-oq))),"binary_signal_mismatches":int(np.sum(side(p)!=side(op))),"multiclass_signal_mismatches":int(np.sum(multi(q)!=multi(oq)))}
+            out["folds"].append(row)
+            print("reproduce",fold.fold_id,row,flush=True)
+        out["status"]="pass" if all(max(r["binary_max_abs_error"],r["multiclass_max_abs_error"])<=1e-6 and not r["binary_signal_mismatches"] and not r["multiclass_signal_mismatches"] for r in out["folds"]) else "review_required"
+    except Exception:out.update(status="fail",error=traceback.format_exc())
+    p=root/"reports"/"45_reproducibility.zip";tmp=p.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
+    tmp.replace(p);print(p,out["status"])
+    if out["status"]!="pass":raise SystemExit(out.get("error","Prediction discrepancy"))
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -243,6 +304,9 @@ def main():
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
+    if args.command=="reproduce":
+        if args.root!=Path("data"):p.error("Reproduce uses default data root")
+        return reproduce()
     if args.command=="integrity":
         if args.root!=Path("data"):p.error("Integrity uses default data root")
         return integrity()
