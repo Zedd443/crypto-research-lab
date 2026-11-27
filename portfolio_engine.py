@@ -152,7 +152,7 @@ def audit_cost_aware(out):
                 out["scenarios"].append({"candidate":name,"fee_bps":fee,"slippage_bps":slip,"fixed_notional_pnl":float(scored["net_return"].sum()),**result})
                 print(name,fee,slip,frac,"done",flush=True)
 
-def audit_exit(out):
+def audit_exit(out, conditional=False):
     """Paired time-exit diagnostic on frozen entries; no re-entry or fitting."""
     from funding_repair_engine import apply
     from data_engine import MINUTE
@@ -170,7 +170,7 @@ def audit_exit(out):
         original=pl.DataFrame(ref["ledger"]).select(keys).sort("entry_time")
         require(original.height== (104 if name=="C01" else 63),"Trade count changed")
         require(original["entry_time"].min()>=A and original["label_end"].max()<B,"Outside development")
-        for minutes in (120,180,240):
+        for minutes in ((60,120,240) if conditional else (120,180,240)):
             records=[]
             for t in original.iter_rows(named=True):
                 e,z=t["entry_time"],t["label_end"]
@@ -181,6 +181,15 @@ def audit_exit(out):
                 x=pl.scan_parquet(p).filter(pl.col("open_time")==q).select("open").collect()
                 require(x.height==1,"Missing or duplicate exit price")
                 px=float(x["open"][0])
+                # At a fixed checkpoint, exit at the NEXT minute open only if
+                # signed return at the checkpoint open is nonpositive.
+                if conditional and minutes!=240:
+                    q=q+MIN if t["side"]*(px/t["entry_price"]-1)<=0 else z
+                    month=datetime.fromtimestamp(q/1000,timezone.utc).strftime("%Y-%m")
+                    p=ROOT/"futures"/"BTCUSDT"/"1m"/(month+".parquet")
+                    x=pl.scan_parquet(p).filter(pl.col("open_time")==q).select("open").collect()
+                    require(x.height==1,"Missing conditional exit price")
+                    px=float(x["open"][0])
                 require(np.isfinite(px) and px>0,"Invalid exit price")
                 if minutes==240:require(np.isclose(px,t["exit_price"]),"Original exit mismatch")
                 records.append({**t,"label_end":q,"exit_price":px})
@@ -195,17 +204,17 @@ def audit_exit(out):
                     require(np.isclose(scored["net_return"].sum(),baseline["fixed_notional_pnl"]),"Baseline reconciliation failed")
                 result=replay(scored,fund,1.,first,last,fee/10000)
                 result.pop("minute_equity");result.pop("ledger")
-                out["results"].append({"candidate":name,"holding_minutes":minutes,"fee_bps":fee,"slippage_bps":slip,"economics":metrics(scored,first,last),"portfolio":result})
+                out["results"].append({"candidate":name,"holding_minutes":minutes,"early_exits":trades.filter(pl.col("label_end")-pl.col("entry_time")<240*MIN).height,"fee_bps":fee,"slippage_bps":slip,"economics":metrics(scored,first,last),"portfolio":result})
                 print(name,minutes,fee,slip,"done",flush=True)
 
 def main():
     import argparse
-    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit'],default='incumbent');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit','invalidation'],default='incumbent');args=p.parse_args()
     out={"scope":"Development diagnostic, fixed fractions not optimized; minute-open marks, actual assumed funding boundary (entry,exit], no liquidation or margin tiers; no intra-minute extrema or executable mark fills."}
     try:
-        ({"compare":audit_cost_aware,"exit":audit_exit,"incumbent":audit}[args.candidate])(out);out["status"]="pass"
+        ({"compare":audit_cost_aware,"exit":audit_exit,"invalidation":lambda o:audit_exit(o,True),"incumbent":audit}[args.candidate])(out);out["status"]="pass"
     except Exception:out["status"]="fail";out["error"]=traceback.format_exc()
-    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","incumbent":"10_portfolio.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","invalidation":"37_early_invalidation.zip","incumbent":"10_portfolio.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
