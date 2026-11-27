@@ -232,3 +232,21 @@ def test_transfer_temporal_funding_uses_requested_calendar(tmp_path,monkeypatch)
            "entry_price":100.,"exit_price":101.,"side":1}]
     r.transfer_score(rows,fund,spans)
     assert rows[0]["outcome_status"]=="scored"
+
+
+def test_batch_plain_report_compatible_with_old_zip(tmp_path, monkeypatch, capsys):
+    import json, zipfile
+    import research_engine as r
+    monkeypatch.setattr(r,"ROOT",tmp_path)
+    report=tmp_path/"reports"/"research_transfer.json"
+    report.parent.mkdir(parents=True)
+    old=report.with_suffix(".zip")
+    with zipfile.ZipFile(old,"w") as z:z.writestr("metrics.json",json.dumps({"status":"old"}))
+    assert r.read_report(old.name)["status"]=="old"
+    root=tmp_path/"research_v2"/"transfer"
+    out={"status":"pass","assets":[],"assets_requested":[],"elapsed_seconds":1.0,"cohorts":{}}
+    r.publish_report(report,root,out,[])
+    assert r.read_report(old.name)["status"]=="pass"
+    assert json.loads((root/"signals.json").read_text())==[]
+    assert old.exists()
+    assert "RESEARCH SUMMARY" in capsys.readouterr().out
