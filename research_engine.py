@@ -757,11 +757,16 @@ def run_transfer(assets):
                         frame=None
                     row["signals"]=len(signals)
                     row["eligible_folds"]=sum(f["status"] in ("pass","cached") for f in row["folds"])
-                    fund,spans=transfer_funding(symbol)
+                    try:fund,spans=transfer_funding(symbol)
+                    except MemoryError:raise
+                    except Exception:
+                        # A funding-source failure does not erase the price-only signal evidence.
+                        fund,spans=None,[]
+                        row["funding_error"]=traceback.format_exc()
                     row["verified_funding_spans"]=spans
                     transfer_score(signals,fund,spans)
                     row["results"]=transfer_summary(signals,first,last)
-                    row["status"]="pass" if all(t["outcome_status"]=="scored" for t in signals) else "partial_outcomes"
+                    row["status"]="pass" if "funding_error" not in row and all(t["outcome_status"]=="scored" for t in signals) else "partial_outcomes"
                     if not row["eligible_folds"]:row["status"]="no_eligible_folds"
                     all_signals.extend(signals)
                     print(symbol,row["status"],len(signals),"signals",flush=True)
