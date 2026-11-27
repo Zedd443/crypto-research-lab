@@ -14,9 +14,9 @@
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M0 | Existing data infrastructure, evidence retention and pilot integrity | Sufficient for existing pilot; broader coverage incomplete |
-| M1 | Joint signal-edge search: timeframe, target horizon, exit, threshold and regularization | Implemented; runtime/tests pending |
-| M2 | Generalization across point-in-time eligible assets, remaining evidence-backed ML/non-ML families, parameter stability and multiple-testing controls | Pending |
-| M3 | Freeze signal protocol; genuinely unseen evaluation or disclose prior exposure; forward signal validation | Pending |
+| M1 | Joint signal-edge search: timeframe, target horizon, exit, threshold and regularization | Completed; fixed control beat adaptive protocols |
+| M2 | Generalization across assets and robustness | 30-contract fixed transfer completed; broad edge not supported; full point-in-time universe and alternative families remain unexhausted |
+| M3 | Freeze signal protocol; genuinely unseen evaluation or disclose prior exposure; forward signal validation | Later-period historical falsification active; genuinely prospective evidence still pending |
 | M4 | Separate risk management/smart allocation research using saved validated signals; shared portfolio, sizing, exposure, margin, fees, order execution and paper trading | Deferred |
 | M5 | Live-readiness decision after independent validation and execution/risk gates | Pending; no live orders |
 
@@ -79,6 +79,29 @@ git pull origin main && python -m pytest -q tests/test_research_components.py -k
 ```
 
 Upload only data/reports/research_transfer.zip. If pytest fails, send traceback. M2 outcome determines whether further fixed signal investigation is warranted; do not keep expanding search merely to rescue negative findings. No new Python file, old search remains reproducible. Implementation commits 0e13057, 58596d9, b313c15, 65bc600, b364978. The 90% threshold is a prespecified engineering choice, not established by data. Actual results pending.
+
+---
+
+## M2 result and active temporal decision — 2026-11-27
+
+Directly inspected uploaded research_transfer.zip (ZIP test clean). Runtime 26 seconds; local transfer tests 2 passed, 15 deselected, 1 grouped as-of sortedness warning. All 30 contracts attempted; 27 with eligible folds (ENA had zero signals); PNUT/VIRTUAL/PENGU insufficient historical coverage. 5,552 all opportunities, 4,747 scored; 2,586 within-symbol nonoverlap, 2,177 scored. Status partial. Nonoverlap metrics, returns in percent:
+
+| Cohort | Total / scored | Standard expectancy | Stress expectancy | Standard fee/slippage-only expectancy |
+|---|---:|---:|---:|---:|
+| Pilot 5 | 488 / 488 | +.605537 | +.424592 | +.600281 |
+| Outside pilot | 2098 / 1689 | -.036942 | -.217324 | +.028686 |
+| All | 2586 / 2177 | +.107077 | -.073431 | +.136551 |
+| Additional 12 | 675 / 433 | +.030900 | -.149509 | +.115313 |
+
+Outside pilot 30-day nominal standard CI [-.343369%, +.283087%]; all 30-day CI [-.150559%, +.379344%]. 409 unknown nonoverlap outcomes (408 unverified funding coverage, 1 settlement event); fee/slippage-only metrics are not funding-adjusted. Full-cohort mean is conditional on scored outcomes. Outside pilot fee/slippage-only stress -.151806%. Do not interpret incomplete outcomes as zero or assume whole-universe edge. Retain fixed pilot cohort as preselected historical candidate, not confirmed live edge. Broad fixed transfer unsupported; no attempt to rescue by mining winners from the same period. DOT/OMG and other fee-only winners are exploratory, not additions to primary cohort.
+
+**Active next step: fixed later-period temporal falsification.** The prior uploaded 01_data_quality.zip records existing OHLCV for five pilot assets through Nov 2026 and funding/mark monthly files through Oct 2026 (22 months Jan 2025–Oct 2026, no null funding intervals in audit). These historical metadata are not verification of current local files. Use same frozen C01 feature/TF/horizon/delay/threshold/C/180d train protocol, no retuning. Fixed primary cohort BTC/ETH/BNB/TRX/NEAR; same 30-symbol universe for context only, do not select new winners from evaluation. Raw range 2024-06-01–2026-11-01; 22 complete 30-day folds with evaluation from 2025-01-01 to 2026-10-23 exclusive; annual breakdown by outcome timestamp. 2025/2026 raw history previously available, so not certified untouched holdout, nor forward test. Explicitly distinguish historical out-of-period from independent prospective evidence. All prior 2021–24 results and caches retained. Reuse transfer implementation with explicit date bounds and separate cache namespace; no new Python file or downloads. Funding 8h spans require observed valid intervals, partial coverage retained and reported; new later-period BTC avoids hardcoded historical funding ledger. Mark-price proxy limitations unchanged. Disclose incomplete pilot decision/funding coverage; 90% coverage flag is heuristic, not live-risk setting. No adaptive strategy rescue, no allocation. If pilot evidence weak, return to distinct hypotheses rather than optimizing on this evaluation period. If positive, freeze and seek genuinely prospective signal validation before risk allocation.
+
+```cmd
+git pull origin main && python -m pytest -q tests/test_research_components.py -k transfer && python research_pipeline.py batch --phase temporal
+```
+
+Upload only data/reports/research_temporal.zip. Implementation commits 6cd90ba, d43569e, 62717ac, f90ecd4. New temporal runtime/tests pending. Earlier individual commands are historical; this is active.
 
 ---
 
