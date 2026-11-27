@@ -192,24 +192,45 @@ def nonoverlap(signals):
             selected.append(t);free[symbol]=t["label_end"]
     return selected
 
-def inner_score(signals,first,last):
-    # Avoid counting repeated overlapping outcomes as independent evidence.
-    # No quota on frequency and no cross-symbol constraint.
-    selected=nonoverlap(signals)
-    n=len(selected);unknown=sum(t["standard"] is None or t["stress"] is None for t in selected)
-    row={"signals":len(signals),"nonoverlap_signals":n,"unknown_funding_trades":unknown,"score":None}
+def summarize_inner(nsignals,primary,stress):
+    n=len(primary)
+    unknown=int(np.sum(~np.isfinite(primary)|~np.isfinite(stress)))
+    row={"signals":int(nsignals),"nonoverlap_signals":n,"unknown_funding_trades":unknown,"score":None}
     if not n or unknown:
         row["reason"]="no_signals" if not n else "unknown_funding"
         return row
-    primary=np.array([t["standard"] for t in selected])
-    stress=np.array([t["stress"] for t in selected])
-    require(all(first<=t["decision_time"]<t["label_end"]<last for t in selected),"Inner signal outside validation")
     row.update(primary_expectancy=float(primary.mean()),stress_expectancy=float(stress.mean()),
                primary_pnl=float(primary.sum()),stress_pnl=float(stress.sum()))
     if primary.mean()>0:
         row["score"]=float(primary.sum()/(n+SPEC["edge_shrinkage_zero_prior_trades"]))
     else:row["reason"]="nonpositive_primary_expectancy"
     return row
+
+def inner_score(signals,first,last):
+    selected=nonoverlap(signals)
+    require(all(first<=t["decision_time"]<t["label_end"]<last for t in selected),"Inner signal outside validation")
+    return summarize_inner(len(signals),np.asarray([t["standard"] for t in selected],dtype=float),
+                           np.asarray([t["stress"] for t in selected],dtype=float))
+
+def inner_outcomes(ds,test,p,threshold,rule,side=None):
+    """Vectorized candidate outcomes; avoid building Python trade ledgers for every trial."""
+    ix=np.flatnonzero(test)
+    if side is None:side=np.where(p[1]>=threshold,1,np.where(p[0]>=threshold,-1,0))
+    require(len(ix)==len(side),"Signal mask mismatch")
+    hit=np.flatnonzero(side)
+    i=ix[hit];v=side[hit]
+    long=ds["variants"][(1,rule)];short=ds["variants"][(-1,rule)]
+    ends=np.where(v==1,long[0][i],short[0][i])
+    primary=np.where(v==1,long[2][i],short[2][i])
+    stress=np.where(v==1,long[3][i],short[3][i])
+    times=ds["d"][i]
+    keep=[];j=0
+    while j<len(i):
+        keep.append(j)
+        # label_end is strictly later than the decision, so search advances.
+        j=int(np.searchsorted(times,ends[j],side="left"))
+    keep=np.asarray(keep,dtype=int)
+    return len(i),primary[keep],stress[keep]
 
 def rule_signals(ds,train,test,feature,quantile,direction):
     """Causal magnitude cutoff fitted on historical features only; no fake probabilities."""
@@ -258,14 +279,14 @@ def search_fold(symbol,ds_all,fold,fit_baseline=False):
         # Threshold/exit search reuses the same trained predictions.
         for rule in RULES:
             for th in ([None] if model=="rule" else THRESHOLDS):
-                signals=[];diagnostics=[]
+                count=0;prim=[];stress=[];diagnostics=[]
                 for val,p,side,lo,hi,total in windows:
-                    v=opportunities(ds,val,p,th,rule,side)
-                    signals.extend(v)
-                    d=inner_score(v,lo,hi)
+                    n,a,b=inner_outcomes(ds,val,p,th,rule,side)
+                    count+=n;prim.append(a);stress.append(b)
+                    d=summarize_inner(n,a,b)
                     diagnostics.append({"start":lo,"end":hi,"eligible_rows":int(val.sum()),
                                         "candidate_rows":total,**d})
-                row=inner_score(signals,first,fold.test_start)
+                row=summarize_inner(count,np.concatenate(prim),np.concatenate(stress))
                 trials.append({**spec,"exit":rule,"threshold":th,"inner_windows":diagnostics,**row})
     for tf,h in ds_all:
         for model in SPEC["models"]:
@@ -371,7 +392,8 @@ def evaluate_edge(signals,funds,first,last,fee,slip):
     for symbol,fund in funds.items():
         known=[t for t in signals if t["symbol"]==symbol and t[which] is not None]
         if not known:continue
-        df=pl.DataFrame(known).select("symbol","entry_time","label_end","entry_price","exit_price","side")
+        keys=("symbol","entry_time","label_end","entry_price","exit_price","side")
+        df=pl.DataFrame([{k:t[k] for k in keys} for t in known])
         valid=fund[0].filter(pl.col("mark_price").is_finite().fill_null(False)&(pl.col("mark_price")>0).fill_null(False))
         scored=score_trades(df,fee,slip,valid,{symbol:[(A,B)]})
         require(scored.height==len(known) and np.allclose(scored["net_return"].to_numpy(),[t[which] for t in known],rtol=1e-10,atol=1e-12),"Edge cost reconciliation failed "+symbol)
@@ -413,7 +435,7 @@ def run(assets):
             out.update(first=first,last=last)
             code=digest([Path(n) for n in ["research_engine.py","data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","experiment_store.py","baseline_engine.py","funding_repair_engine.py","robustness_engine.py"]])
             # Keep selection identity independent of final report presentation.
-            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,nonoverlap,inner_score,rule_signals,inner_masks,search_fold,load_funding))).encode()).hexdigest()
+            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,nonoverlap,summarize_inner,inner_score,inner_outcomes,rule_signals,inner_masks,search_fold,load_funding))).encode()).hexdigest()
             builder_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py")])+inspect.getsource(base_arrays)).encode()).hexdigest()
             search_spec=SPEC
             out.update(code_hash=code,model_code_hash=model_code)
