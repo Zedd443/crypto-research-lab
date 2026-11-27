@@ -6,6 +6,7 @@ os.environ.setdefault("POLARS_MAX_THREADS","1")
 import json, zipfile, traceback, hashlib, time, inspect, gc, io
 import psutil
 from pathlib import Path
+from datetime import datetime, timezone
 import numpy as np
 import polars as pl
 import sklearn
@@ -545,12 +546,17 @@ TRANSFER_SPEC={"tf":"1h","horizon_hours":4,"delay_minutes":15,"threshold":.70,
                "min_train_coverage":.90,"costs_bps":COSTS,
                "universe":"all configured crypto symbols, regardless of prior performance"}
 
-def transfer_dataset(symbol,raw,path):
+def range_monthly(directory,start,end):
+    lo=datetime.fromtimestamp(start/1000,timezone.utc).strftime("%Y-%m")
+    hi=datetime.fromtimestamp((end-1)/1000,timezone.utc).strftime("%Y-%m")
+    return [p for p in sorted(directory.glob("*.parquet")) if lo<=p.stem<=hi]
+
+def transfer_dataset(symbol,raw,path,start=A,end=B):
     """One hourly feature build. Retain decisions with missing future prices."""
     if path.exists():return pl.read_parquet(path)
     bars=[];points=[]
     for p in raw:
-        f=pl.read_parquet(p).filter(pl.col("open_time").is_between(A,B,closed="left")).sort("open_time")
+        f=pl.read_parquet(p).filter(pl.col("open_time").is_between(start,end,closed="left")).sort("open_time")
         if not f.height:continue
         t=f["open_time"].to_numpy()
         require(np.all(t%MIN==0) and np.all(np.diff(t)>0),"Invalid raw timestamps "+str(p))
@@ -614,14 +620,14 @@ def transfer_cached(symbol,paths,folds):
         signals.extend(t);rows.append({"fold":f.fold_id,"status":"cached","test_rows":v.height,"signals":len(t)})
     return rows,signals
 
-def transfer_funding(symbol):
+def transfer_funding(symbol,start=A,end=B):
     """Verify local 8h schedule spans, including shorter listed histories.
     Never extrapolate funding beyond verified spans, or replace missing rates/marks with zero.
     """
-    if symbol=="BTCUSDT":
+    if symbol=="BTCUSDT" and (start,end)==(A,B):
         return load_funding(symbol),[(A,B)]
     parts=[]
-    for p in monthly(ROOT/"funding"/symbol):
+    for p in range_monthly(ROOT/"funding"/symbol,start,end):
         x=pl.read_parquet(p).select("event_time","funding_rate","funding_interval_hours")
         mp=ROOT/"mark"/symbol/p.name
         if mp.exists():
@@ -630,7 +636,7 @@ def transfer_funding(symbol):
         else:x=x.with_columns(pl.lit(None,dtype=pl.Float64).alias("mark_price"))
         parts.append(x.select("event_time","funding_rate","funding_interval_hours","mark_price"))
     if not parts:return None,[]
-    f=pl.concat(parts).filter(pl.col("event_time").is_between(A,B,closed="left")).sort("event_time")
+    f=pl.concat(parts).filter(pl.col("event_time").is_between(start,end,closed="left")).sort("event_time")
     if not f.height:return None,[]
     ts=f["event_time"].to_numpy()
     require(len(np.unique(ts))==len(ts),"Duplicate funding events")
@@ -644,7 +650,7 @@ def transfer_funding(symbol):
             spans.append((start,int(ts[i])));start=None
     if start is not None:spans.append((start,int(ts[-1])))
     # Same complete-calendar convention as the original audited 8h engine.
-    if good_grid.all() and np.array_equal(grid,np.arange(A,B,8*H)):spans=[(A,B)]
+    if good_grid.all() and np.array_equal(grid,np.arange(start,end,8*H)):spans=[(start,end)]
     rate=f["funding_rate"].cast(pl.Float64).to_numpy();price=f["mark_price"].cast(pl.Float64).to_numpy()
     good=np.isfinite(rate)&np.isfinite(price)&(price>0)
     f=f.with_columns(pl.lit(symbol).alias("symbol")).select("symbol","event_time","funding_rate","mark_price")
@@ -699,14 +705,20 @@ def transfer_summary(signals,first,last,bootstrap=False):
                       "fee_slip_only_stress":stats(rows,"fee_slip_stress",False)}
     return result
 
-def run_transfer(assets):
+def run_transfer(assets,temporal=False):
     import portalocker
     started=time.monotonic()
-    root=ROOT/"research_v2"/"transfer";root.mkdir(parents=True,exist_ok=True)
-    report=ROOT/"reports"/"research_transfer.zip";report.parent.mkdir(parents=True,exist_ok=True)
+    from data_engine import ms,date
+    phase="temporal" if temporal else "transfer"
+    root=ROOT/"research_v2"/phase;root.mkdir(parents=True,exist_ok=True)
+    report=ROOT/"reports"/("research_"+phase+".zip");report.parent.mkdir(parents=True,exist_ok=True)
+    raw_start=ms(date("2024-06-01")) if temporal else A
+    raw_end=ms(date("2026-11-01")) if temporal else B
     out={"protocol":TRANSFER_SPEC,"assets_requested":assets,"assets":[],
          "scope":"Fixed specification development transfer; historical universe purposive, not survivorship-free. Previously screened negative assets retained. New fits use observed historical coverage, not verified listing dates. No capital constraints, tuning, holdout or downloads. Fee/slippage-only outcomes are NOT funding-adjusted.",
-         "cohorts":{}}
+         "cohorts":{},"phase":phase}
+    if temporal:
+        out["scope"]="Frozen 2021-24 selected C01 specification, later-period historical evaluation; NOT certified unseen and NOT forward/live. Primary cohort fixed BTC/ETH/BNB/TRX/NEAR; other assets contextual reference only, no new selection. No tuning, downloads, capital constraints or risk allocation."
     all_signals=[]
     with portalocker.Lock(str(root/"coordinator.lock"),timeout=0):
         try:
@@ -722,22 +734,28 @@ def run_transfer(assets):
                 for r in read_report(name)["results"]:
                     attempted.add(r["symbol"])
                     if r["status"]=="pass":oldrows[r["symbol"]]=r
-            folds=make_folds(A,B,180,30);first,last=folds[0].test_start,folds[-1].test_end
-            out.update(first=first,last=last)
+            if temporal:
+                previous=read_report("research_transfer.zip")
+                require(set(previous["assets_requested"])==set(CRYPTO_SYMBOLS),"Development transfer scope incomplete")
+                require(identity(previous["protocol"])==identity(TRANSFER_SPEC),"Frozen transfer protocol changed")
+                require(all(r["status"]=="pass" for r in previous["assets"] if r["symbol"] in ASSETS) and set(ASSETS).issubset({r["symbol"] for r in previous["assets"]}),"Pilot development coverage incomplete")
+            folds=make_folds(B-180*DAY,raw_end,180,30) if temporal else make_folds(A,B,180,30)
+            first,last=folds[0].test_start,folds[-1].test_end
+            out.update(first=first,last=last,raw_start=raw_start,raw_end=raw_end,fold_count=len(folds))
             source_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py"),Path("validation_protocol.py")])+
                                       "".join(inspect.getsource(f) for f in (transfer_dataset,transfer_fit_fold,transfer_extract))).encode()).hexdigest()
             for symbol in assets:
                 row={"symbol":symbol,"cohort":"pilot" if symbol in ASSETS else ("prior_screened" if symbol in attempted else "additional_universe")}
                 out["assets"].append(row)
                 try:
-                    raw=monthly(ROOT/"futures"/symbol/"1m")
+                    raw=range_monthly(ROOT/"futures"/symbol/"1m",raw_start,raw_end)
                     if not raw:
                         row["status"]="no_development_raw";continue
                     raw_hash=digest(raw);row["raw_hash"]=raw_hash
                     paths=[]
-                    if symbol=="BTCUSDT" and prior_rows[symbol]["raw_hash"]==raw_hash:
+                    if not temporal and symbol=="BTCUSDT" and prior_rows[symbol]["raw_hash"]==raw_hash:
                         paths=sorted((folder/"predictions").glob("*.parquet"))
-                    elif symbol in oldrows and oldrows[symbol].get("source")==raw_hash:
+                    elif not temporal and symbol in oldrows and oldrows[symbol].get("source")==raw_hash:
                         paths=sorted((ROOT/"multi_asset"/oldrows[symbol]["experiment"]/"predictions").glob("*.parquet"))
                     if paths and {p.stem for p in paths}=={str(f.fold_id) for f in folds}:
                         ph=digest(paths)
@@ -748,7 +766,7 @@ def run_transfer(assets):
                     else:
                         row["mode"]="fixed_refit"
                         key={"symbol":symbol,"raw":raw_hash,"spec":TRANSFER_SPEC,"code":source_code,
-                             "numpy":np.__version__,"polars":pl.__version__,"sklearn":sklearn.__version__}
+                             "numpy":np.__version__,"polars":pl.__version__,"sklearn":sklearn.__version__,"raw_bounds":[raw_start,raw_end],"fold_bounds":[first,last]}
                         cache_id=identity(key);row["identity"]=cache_id
                         cache=root/"datasets"/cache_id/"dataset.parquet"
                         completed=root/"folds"/cache_id
@@ -756,14 +774,14 @@ def run_transfer(assets):
                         for fold in folds:
                             if not (completed/(str(fold.fold_id)+".json")).exists() and frame is None:
                                 memory_preflight(symbol+" transfer dataset")
-                                frame=transfer_dataset(symbol,raw,cache)
+                                frame=transfer_dataset(symbol,raw,cache,raw_start,raw_end)
                             v=checkpoint(root/"folds",key,fold.fold_id,lambda:transfer_fit_fold(frame,fold))
                             signals.extend(v["signals"])
                             row["folds"].append({**{k:x for k,x in v.items() if k!="signals"},"signals":len(v["signals"])})
                         frame=None
                     row["signals"]=len(signals)
                     row["eligible_folds"]=sum(f["status"] in ("pass","cached") for f in row["folds"])
-                    try:fund,spans=transfer_funding(symbol)
+                    try:fund,spans=transfer_funding(symbol,first,last) if temporal else transfer_funding(symbol)
                     except MemoryError:raise
                     except Exception:
                         # A funding-source failure does not erase the price-only signal evidence.
@@ -772,6 +790,9 @@ def run_transfer(assets):
                     row["verified_funding_spans"]=spans
                     transfer_score(signals,fund,spans)
                     row["results"]=transfer_summary(signals,first,last)
+                    if temporal:
+                        row["expected_test_rows"]=len(folds)*((30*DAY-15*MIN-4*H-1)//H+1)
+                        row["observed_test_rows"]=sum(f["test_rows"] for f in row["folds"] if f["status"] in ("pass","cached"))
                     row["status"]="pass" if "funding_error" not in row and all(t["outcome_status"]=="scored" for t in signals) else "partial_outcomes"
                     if not row["eligible_folds"]:row["status"]="no_eligible_folds"
                     all_signals.extend(signals)
@@ -786,6 +807,16 @@ def run_transfer(assets):
                 symbols={r["symbol"] for r in out["assets"] if name=="all" or r["cohort"]==name or (name=="outside_pilot" and r["cohort"]!="pilot")}
                 v=[t for t in all_signals if t["symbol"] in symbols]
                 out["cohorts"][name]={"symbols":sorted(symbols),"results":transfer_summary(v,first,last,True)}
+            if temporal:
+                # Calendar-year slices are descriptive, not new selection windows.
+                cut=ms(date("2026-01-01"))
+                out["calendar_years"]={}
+                for year,lo,hi in ((2025,first,cut),(2026,cut,last)):
+                    out["calendar_years"][str(year)]={}
+                    for name in ("pilot","outside_pilot","all"):
+                        v=[t for t in all_signals if lo<=t["label_end"]<hi and (name=="all" or (t["symbol"] in ASSETS)==(name=="pilot"))]
+                        out["calendar_years"][str(year)][name]=transfer_summary(v,lo,hi,True)
+                out["pilot_status"]={r["symbol"]:r["status"] for r in out["assets"] if r["symbol"] in ASSETS}
             out["status"]="pass" if len(out["assets"])==len(assets) and all(r["status"]=="pass" for r in out["assets"]) else "partial"
         except Exception:out.update(status="fail",error=traceback.format_exc())
         out["elapsed_seconds"]=time.monotonic()-started
