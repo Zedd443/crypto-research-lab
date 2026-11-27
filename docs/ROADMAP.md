@@ -456,3 +456,13 @@ git pull origin main
 python research_pipeline.py extended-funding
 ```
 Upload data/reports/40_extended_funding.zip even if partial or failed.
+
+
+## Checkpoint — Report 40 PASS; provisional C07/C08
+Direct inspection of 40_extended_funding.zip: TRX/NEAR each 4383 standard 8h events, 21 missing settlement marks each, zero affected trades. Primary net expectancy (%) .694988/.733511, PF 1.914721/1.442375, fixed-notional P&L (%) 82.008601/63.815458, realized DD (%) 20.459392/40.200466. Stress P&L (%) 60.652787/47.979301. TRX nominal CIs cross zero at both costs; NEAR standard 7d CI [.000877%,1.554607%], 30d [.148612%,1.404997%], stress both cross zero. NEAR annual P&L positive each year even stress; TRX 2023 negative. No multiple-testing adjustment. Add provisional C07 TRX and C08 NEAR, not tuning priorities. Next Report 41 uses existing portfolio_engine.py (2f2e642), symbol-aware mark windows and frozen report39/40 reconciliation, funding source hash and schedule checks, no dropped trades, independent per-symbol replay at .25/.5/1 notional fractions, standard/stress costs. Not a combined portfolio. Missing intratrade marks block only affected symbol and are reported for targeted repair. Minute-open proxies, no margin/liquidation, no independent holdout. CLI fcb3eea. Runtime unverified; no new Python files, training or downloads. Continue broader hypothesis screening after this bounded risk audit.
+
+```cmd
+git pull origin main
+python research_pipeline.py alt-portfolio
+```
+Upload data/reports/41_alt_portfolio.zip even if failed.
