@@ -14,7 +14,8 @@ ROOT=Path("data")
 def main():
     import argparse
     from funding_repair_engine import apply
-    parser=argparse.ArgumentParser();parser.add_argument("--extended",action="store_true");args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument("--extended",action="store_true");parser.add_argument("--stateful",action="store_true");args=parser.parse_args()
+    if args.stateful:args.extended=True
     folder,=list((ROOT/"experiments").glob("6823506d*"))
     spec=json.loads((folder/"spec.json").read_text())
     if identity(spec)!=folder.name:raise ValueError("Incumbent identity mismatch")
@@ -77,22 +78,38 @@ def main():
     fund=fund.filter(pl.col("mark_price").is_not_null())
     first=f["decision_time"].min()//DAY*DAY;last=(f["label_end"].max()//DAY+1)*DAY
     results=[]
-    for name in ([*rules,"incumbent"] if args.extended else [*rules,"incumbent","always_long","always_short"]):
+    for name in (list(rules) if args.stateful else ([*rules,"incumbent"] if args.extended else [*rules,"incumbent","always_long","always_short"])):
         sides=f[name].to_numpy(); ix=[]; free=-1
         for i,(d,e,s) in enumerate(zip(f["decision_time"],f["label_end"],sides)):
             if s and d>=free:ix.append(i);free=e
         t=f.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price",pl.col(name).alias("side")).with_row_index("idx").filter(pl.col("idx").is_in(ix)).drop("idx")
+        if args.stateful:
+            dt=f["decision_time"].to_numpy();et=f["entry_time"].to_numpy();ep=f["entry_price"].to_numpy()
+            if not np.all(et-dt==900000):raise ValueError("Unexpected execution delay")
+            records=[];pos=0;start=None
+            for i,v in enumerate(sides):
+                desired=int(v) if i<len(sides)-1 else 0
+                if desired==pos:continue
+                if pos:records.append({"symbol":"BTCUSDT","decision_time":int(dt[start]),"entry_time":int(et[start]),"label_end":int(et[i]),"entry_price":float(ep[start]),"exit_price":float(ep[i]),"side":pos})
+                pos=desired;start=i if pos else None
+            t=pl.DataFrame(records,schema={"symbol":pl.String,"decision_time":pl.Int64,"entry_time":pl.Int64,"label_end":pl.Int64,"entry_price":pl.Float64,"exit_price":pl.Float64,"side":pl.Int64})
         bad=np.searchsorted(missing,t["label_end"].to_numpy(),side="right")>np.searchsorted(missing,t["entry_time"].to_numpy(),side="right")
+        if args.stateful and np.any(bad):raise ValueError("Unknown funding affects stateful trades")
         total=t.height;t=t.filter(pl.Series("eligible",~bad))
         rows=[]
         for fee,slip in [(5,1),(10,5)]:
             scored=score_trades(t,fee,slip,fund,{"BTCUSDT":[(A,B)]}) if t.height else t
             rows.append({"fee_bps":fee,"slippage_bps":slip,**metrics(scored,first,last)})
-        results.append({"rule":name,"original_trades":total,"excluded_unknown_funding":int(bad.sum()),"metrics":rows})
+        duration=(t["label_end"]-t["entry_time"]).to_numpy()/3600000
+        results.append({"holding_hours_mean":float(duration.mean()) if len(duration) else None,"exposure":float(duration.sum()*3600000/(last-first)),"rule":name,"original_trades":total,"excluded_unknown_funding":int(bad.sum()),"metrics":rows})
         print(name,"done",flush=True)
     out={"scope":"Exploratory fixed-horizon adaptations, not paper replication; common incumbent decision grid; non-overlap, 15m delay/4h exit; unknown funding excluded after selection; fixed notional not equity; no multiple testing correction","rules":list(rules),"source_hash":digest(src+paths+[Path(__file__),Path("execution_engine.py"),Path("robustness_engine.py")]),"results":results}
     if args.extended:out["scope"]+="; OBV signed rolling volume and percentage filter state adaptations; recovered funding ledger; fixed 4h exits, not stateful execution";out["status"]="pass"
-    p=ROOT/"reports"/("38_technical_extended.zip" if args.extended else "12_technical_rules.zip");p.parent.mkdir(parents=True,exist_ok=True)
+    if args.stateful:
+        out["scope"]="Stateful OBV/filter adaptations on incumbent eligible grid, 15m execution delay; hold until signal changes, flatten on neutral and close at terminal eligible execution time; gap may delay exit; complete recovered funding, fixed notional; no tuning or holdout; not exact paper replication"
+        out["decision_gap_count"]=int(np.sum(np.diff(f["decision_time"].to_numpy())>3600000))
+        out["max_decision_gap_hours"]=float(np.max(np.diff(f["decision_time"].to_numpy()))/3600000)
+    p=ROOT/"reports"/("43_stateful_extended.zip" if args.stateful else ("38_technical_extended.zip" if args.extended else "12_technical_rules.zip"));p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p)
