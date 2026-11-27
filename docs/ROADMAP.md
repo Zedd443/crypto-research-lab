@@ -402,3 +402,7 @@ git pull origin main
 python post_repair_coverage_engine.py
 ```
 Upload data/reports/34_post_repair_coverage.zip.
+
+
+## Checkpoint — Report 34 PASS; prioritize missing economic inputs
+34_post_repair_coverage.zip: 8202 partition records, 2021 review items, zero runtime errors. 18/30 crypto have 48 full raw months: original ten plus SOL/TRX/LTC/NEAR/AAVE/FIL/WAVES/OMG. DOT/XRP each 47 full and one partial; listing/delisting remains unverified. Auxiliary absent mark and funding each: AAVE/FIL 48 months each, DOT/XRP/SUI 14 each, LOOM 9. Metrics 448 INVALID (null/nonfinite or duplicates, not necessarily corrupt whole partition), 357 absent, 72 partial, 250 complete grid. Funding 980 observed partitions, schedule unverified. ATOM spot now present, partial gaps remain. Prioritize economic inputs only; defer other auxiliary gaps until needed by hypothesis. Next targeted acquisition using existing derivatives_engine.py with no forced repair on complete partitions. AAVE/FIL 2021-01 to 2025-01; DOT/XRP/SUI 2023-11 to 2025-01; LOOM missing months to be checked separately before acquisition. Cached zero-row markers may need targeted --repair; verify actual files with report 34 rerun. No assumption of standard funding intervals, no tuning/holdout. BTC remains pilot.
