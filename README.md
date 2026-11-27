@@ -7,10 +7,10 @@ Binance USD-M futures research focused on finding robust, cost-aware signal edge
 From the repository root with the existing .venv activated:
 
 ```cmd
-git pull origin main && python -m pytest -q tests/test_research_components.py -k transfer && python research_pipeline.py batch --phase transfer
+git pull origin main && python -m pytest -q tests/test_research_components.py -k transfer && python research_pipeline.py batch --phase temporal
 ```
 
-M1 search completed; fixed logistic beat the adaptive selection methods on the five-asset pilot. Active M2 transfer tests the frozen specification across all 30 configured crypto contracts, without repeated tuning. One upload after the run: `data/reports/research_transfer.zip` (also if status is partial/fail). If tests fail before the batch, send the traceback. Do not run historical commands one by one. Repeat the same command after interruption; completed per-symbol/fold checkpoints are reused. No automatic downloads or data repair, no holdout access.
+M1 search completed; fixed logistic beat the adaptive selection methods on the five-asset pilot. M2 broad transfer did not establish generalization beyond the five preselected pilot assets. Active temporal evaluation tests the same frozen specification in later historical data, 2025-01-01 to 2026-10-23 exclusive, without tuning. Primary cohort is fixed BTC/ETH/BNB/TRX/NEAR; other configured assets are contextual reference only. One upload after the run: `data/reports/research_temporal.zip` (also if status is partial/fail). Not certified unseen or prospective evidence. If tests fail before the batch, send the traceback. Do not run historical commands one by one. Repeat the same command after interruption; completed per-symbol/fold checkpoints are reused. No automatic downloads or data repair, no holdout access.
 
 Transfer default: all configured crypto contracts. Optional `--symbols` accepts a subset. Reuse compatible predictions, otherwise fit the fixed specification when historical training coverage reaches 90%. Missing execution prices or funding outcomes remain unscored; fee/slippage-only and verified net results are separate. No certified listing/delisting dates; observed history is a coverage proxy. Historical M1 search remains available via `--phase search` (default).
 
