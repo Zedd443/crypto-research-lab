@@ -642,13 +642,13 @@ def transfer_funding(symbol,start=A,end=B):
     require(len(np.unique(ts))==len(ts),"Duplicate funding events")
     grid=((ts+MIN//2)//(8*H))*(8*H)
     good_grid=(np.abs(ts-grid)<=MIN)&(f["funding_interval_hours"].fill_null(-1).to_numpy()==8)
-    spans=[];start=None
+    spans=[];segment_start=None
     for i in range(len(ts)-1):
         if good_grid[i] and good_grid[i+1] and grid[i+1]-grid[i]==8*H:
-            if start is None:start=int(ts[i])
-        elif start is not None:
-            spans.append((start,int(ts[i])));start=None
-    if start is not None:spans.append((start,int(ts[-1])))
+            if segment_start is None:segment_start=int(ts[i])
+        elif segment_start is not None:
+            spans.append((segment_start,int(ts[i])));segment_start=None
+    if segment_start is not None:spans.append((segment_start,int(ts[-1])))
     # Same complete-calendar convention as the original audited 8h engine.
     if good_grid.all() and np.array_equal(grid,np.arange(start,end,8*H)):spans=[(start,end)]
     rate=f["funding_rate"].cast(pl.Float64).to_numpy();price=f["mark_price"].cast(pl.Float64).to_numpy()
@@ -795,6 +795,7 @@ def run_transfer(assets,temporal=False):
                         row["observed_test_rows"]=sum(f["test_rows"] for f in row["folds"] if f["status"] in ("pass","cached"))
                     row["status"]="pass" if "funding_error" not in row and all(t["outcome_status"]=="scored" for t in signals) else "partial_outcomes"
                     if not row["eligible_folds"]:row["status"]="no_eligible_folds"
+                    elif temporal and row["status"]=="pass" and (row["eligible_folds"]<len(folds) or row["observed_test_rows"]<.90*row["expected_test_rows"]):row["status"]="partial_decision_coverage"
                     all_signals.extend(signals)
                     print(symbol,row["status"],len(signals),"signals",flush=True)
                 except MemoryError:
@@ -817,6 +818,7 @@ def run_transfer(assets,temporal=False):
                         v=[t for t in all_signals if lo<=t["label_end"]<hi and (name=="all" or (t["symbol"] in ASSETS)==(name=="pilot"))]
                         out["calendar_years"][str(year)][name]=transfer_summary(v,lo,hi,True)
                 out["pilot_status"]={r["symbol"]:r["status"] for r in out["assets"] if r["symbol"] in ASSETS}
+                out["pilot_evaluation_complete"]=set(out["pilot_status"])==set(ASSETS) and all(v=="pass" for v in out["pilot_status"].values())
             out["status"]="pass" if len(out["assets"])==len(assets) and all(r["status"]=="pass" for r in out["assets"]) else "partial"
         except Exception:out.update(status="fail",error=traceback.format_exc())
         out["elapsed_seconds"]=time.monotonic()-started
