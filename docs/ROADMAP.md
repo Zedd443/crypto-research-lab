@@ -476,3 +476,14 @@ git pull origin main
 python research_pipeline.py diversification
 ```
 Upload data/reports/42_diversification.zip even if failed.
+
+
+## Checkpoint — Report 42 PASS; close equal-sleeve screening
+Inspected uploaded 42_diversification.zip: at fraction 1, standard return (%) BTC/BTC+TRX/BTC+NEAR/all three = 74.033522/90.920832/67.690504/81.063050; daily-close DD (%) 5.303505/15.134000/11.039058/11.172647; daily Sharpe 1.599190/.915438/1.297554/1.066965; stress return (%) 44.368226/56.202934/41.083162/50.067989. BTC has highest Sharpe and lowest daily-close DD across all tested fractions and costs. Daily strategy return correlations BTC/TRX .071602, BTC/NEAR -.039637, TRX/NEAR .008784 at standard fraction 1; overlap minutes 2220/6060/3180. Park tested equal initial capital sleeve combinations; no inference against all possible diversified allocations. C07/C08 remain evidence, not tuning priorities. No combined intraday MTM, no independent validation.
+Next Report 43 closes deferred stateful OBV/filter hypothesis from Report 38: reuse identical OBV20/100 and percentage filter 1/2% signals in technical_rule_engine.py (cd88310), hold until signal changes, neutral flatten, opposite reverse, 15m delay, terminal close, common incumbent eligible grid, report decision gaps and exposure. Recovered funding ledger, no unknown-funding exclusions allowed, standard/stress costs, fixed-notional screening only. No exact paper replication, no tuning, new files, download or training. CLI 4ed39dd. Runtime unverified. Then proceed to research integrity and bounded remaining literature hypotheses before nested tuning.
+
+```cmd
+git pull origin main
+python research_pipeline.py stateful-extended
+```
+Upload data/reports/43_stateful_extended.zip, or terminal traceback if blocked.
