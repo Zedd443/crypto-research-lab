@@ -446,3 +446,13 @@ git pull origin main
 python research_pipeline.py extended-transfer
 ```
 Upload data/reports/39_extended_transfer.zip even if partial or failed.
+
+
+## Checkpoint — Report 39 PARTIAL; prioritize TRX and NEAR
+Directly inspected 39_extended_transfer.zip: seven additional assets completed, WAVES failed minimum train/test sample assertion (not a negative economic result). SOL/TRX/LTC/NEAR/AAVE/FIL/OMG standard fee/slippage-only expectancy (%) -.036548/.694704/.083839/.715735/.448388/.323111/.730031; PF .984/1.916/1.090/1.431/1.298/1.288/1.463. All seven Brier scores worse than naive. TRX 118 trades, primary fixed P&L 81.975%, DD 20.362%, stress P&L 60.620%; 2023 negative, 62 trades in 2024, nominal 7/30d expectancy CI crosses zero even primary. NEAR promising but DD 40.507%. Prioritize TRX and NEAR for funding audit; park SOL/LTC, defer AAVE/FIL and OMG (contract lifecycle unverified). WAVES eligibility diagnosis deferred, preserve cached work. No new confirmed candidate before funding and risk validation. Next Report 40 reuses multi_asset_funding_engine.py (da87d73), CLI (7e8dd78), reads frozen report 39 predictions, strict 8h funding schedule gate; nonstandard schedules require separate evidence. No downloads, training, new Python files or holdout. Runtime unverified.
+
+```cmd
+git pull origin main
+python research_pipeline.py extended-funding
+```
+Upload data/reports/40_extended_funding.zip even if partial or failed.
