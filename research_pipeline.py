@@ -445,14 +445,15 @@ def main():
     p.add_argument("--tf",nargs="+",choices=["5m","15m","30m","1h","4h","8h","12h","1d"],default=["15m","1h","4h","1d"])
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
+    p.add_argument("--phase",choices=["search","transfer"],default="search",help="Batch phase; transfer tests fixed signals without parameter search")
     args=p.parse_args()
     if args.command=="batch":
         if args.root!=Path("data"):p.error("Batch currently uses default data root")
-        from research_engine import ASSETS,run
-        symbols=ASSETS if args.symbols==SYMBOLS else list(dict.fromkeys(args.symbols))
+        from research_engine import ASSETS,run,run_transfer
         from universe import CRYPTO_SYMBOLS
+        symbols=(CRYPTO_SYMBOLS if args.phase=="transfer" else ASSETS) if args.symbols==SYMBOLS else list(dict.fromkeys(args.symbols))
         if not set(symbols).issubset(CRYPTO_SYMBOLS):p.error("Batch supports crypto contracts only; listing-aware TradFi not yet supported")
-        raise SystemExit(run(symbols))
+        raise SystemExit(run_transfer(symbols) if args.phase=="transfer" else run(symbols))
     if args.command=="calibration":
         if args.root!=Path("data"):p.error("Calibration uses default data root")
         return calibration()
