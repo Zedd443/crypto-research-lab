@@ -357,9 +357,81 @@ def predictive_diagnostics():
     tmp.replace(p);print(p,out["status"])
     if out["status"]!="pass":raise SystemExit(out["error"])
 
+def calibration():
+    """Fit a single temperature on prior OOS folds only; preserve frozen models."""
+    import zipfile, traceback, hashlib
+    import numpy as np
+    from scipy.optimize import minimize_scalar
+    from robustness_engine import A,B,ledger,pick,metrics
+    from funding_repair_engine import apply
+    from execution_engine import score_trades
+    from cost_aware_target_engine import select,KEYS
+    root=Path("data")
+    out={"scope":"Exploratory prequential temperature scaling on earlier completed OOS folds; first six folds warmup, same subsequent calendar and fixed threshold .70; no model refits, no holdout","results":[]}
+    def read(n):
+        with zipfile.ZipFile(root/"reports"/n) as z:return json.loads(z.read("metrics.json"))
+    def check(ok,msg):
+        if not ok:raise ValueError(msg)
+    def scale(p,t):
+        x=np.log(np.clip(p,1e-12,1))/t
+        x=np.exp(x-x.max(axis=1,keepdims=True))
+        return x/x.sum(axis=1,keepdims=True)
+    try:
+        gate=read("46_predictive_diagnostics.zip");rep=read("21_cost_aware_target.zip")
+        check(gate["status"]==rep["status"]=="pass","Prior gate failed")
+        folder,=list((root/"experiments").glob("6823506d*"))
+        man=json.loads((folder/"manifest.json").read_text())
+        fund=apply(ledger(root)).sort("event_time")
+        check(hashlib.sha256(fund.write_csv().encode()).hexdigest()==rep["funding_hash"],"Funding mismatch")
+        folds=man["folds"]
+        check(len(folds)==42,"Fold count mismatch")
+        first,last=folds[6]["test_start"],folds[-1]["test_end"]
+        out.update(first=first,last=last)
+        for name,directory in [("C01",folder/"predictions"),("C02",root/"target_v2"/rep["experiment"])]:
+            history=[];raw=[];cal=[];temps=[];ys=[];ps=[];qs=[]
+            for i,fd in enumerate(folds):
+                pth=directory/(str(fd["fold_id"])+".parquet")
+                check(hashlib.sha256(pth.read_bytes()).hexdigest()==gate["prediction_hashes"][str(pth)],"Prediction hash mismatch")
+                f=pl.read_parquet(pth).sort("decision_time")
+                check(f["decision_time"].min()>=fd["test_start"] and f["label_end"].max()<fd["test_end"],"Fold scope mismatch")
+                if name=="C01":
+                    p=f["prediction"].to_numpy();p=np.column_stack([1-p,p]);y=(f["target_return"].to_numpy()>0).astype(int)
+                else:
+                    p=f.select("p_short","p_flat","p_long").to_numpy();y=f["cost_target"].to_numpy()+1
+                if i>=6:
+                    h=np.concatenate([x[0] for x in history]);a=np.concatenate([x[1] for x in history])
+                    def loss(t):
+                        z=scale(h,t)
+                        return float(-np.log(np.clip(z[np.arange(len(a)),a],1e-12,1)).mean())
+                    fit=minimize_scalar(loss,bounds=(.25,8.),method="bounded")
+                    check(fit.success,"Calibration fit failed")
+                    q=scale(p,float(fit.x))
+                    if name=="C01":g=f.with_columns(pl.Series("prediction",q[:,1]))
+                    else:g=f.with_columns(*[pl.Series(k,q[:,j]) for j,k in enumerate(["p_short","p_flat","p_long"])])
+                    raw.append(f);cal.append(g);ys.append(y);ps.append(p);qs.append(q)
+                    temps.append({"fold":fd["fold_id"],"temperature":float(fit.x),"calibration_rows":len(a)})
+                history.append((p,y))
+            y=np.concatenate(ys);p=np.concatenate(ps);q=np.concatenate(qs);one=np.eye(p.shape[1])[y]
+            row={"candidate":name,"temperatures":temps,"results":[]}
+            for label,frames,prob in [("raw",raw,p),("calibrated",cal,q)]:
+                f=pl.concat(frames).sort("decision_time")
+                t=pick(f,"logistic",.7) if name=="C01" else select(f)
+                result={"variant":label,"rows":len(y),"brier":float(np.mean(np.sum((prob-one)**2,axis=1))),"log_loss":float(-np.log(np.clip(prob[np.arange(len(y)),y],1e-12,1)).mean()),"economics":[]}
+                for fee,slip in [(5,1),(10,5)]:
+                    scored=score_trades(t,fee,slip,fund,{"BTCUSDT":[(A,B)]}) if t.height else t
+                    result["economics"].append({"fee_bps":fee,"slippage_bps":slip,"trades":t.height,**(metrics(scored,first,last) if t.height else {})})
+                row["results"].append(result)
+            out["results"].append(row);print(name,"done",flush=True)
+        out["status"]="pass"
+    except Exception:out.update(status="fail",error=traceback.format_exc())
+    p=root/"reports"/"47_calibration.zip";tmp=p.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
+    tmp.replace(p);print(p,out["status"])
+    if out["status"]!="pass":raise SystemExit(out["error"])
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce","predictive-diagnostics"])
+    p.add_argument("command",choices=["discover","download","audit","compare","coverage","invalid-candles","repair-funding","repair-marks","repair-channel-marks","candidate-portfolio","time-exit","early-invalidation","technical-extended","extended-transfer","extended-funding","alt-portfolio","diversification","stateful-extended","integrity","reproduce","predictive-diagnostics","calibration"])
     p.add_argument("--root",type=Path,default=Path("data"))
     p.add_argument("--symbols",nargs="+",choices=SYMBOLS,default=SYMBOLS)
     p.add_argument("--start",default="2019-09-01")
@@ -369,6 +441,9 @@ def main():
     p.add_argument("--repair",action="store_true",help="Recheck archives and rebuild resampled partitions")
     p.add_argument('--workers',type=int,choices=range(1,9),default=None,help='Concurrent pairs (download default 4; other commands default 1)')
     args=p.parse_args()
+    if args.command=="calibration":
+        if args.root!=Path("data"):p.error("Calibration uses default data root")
+        return calibration()
     if args.command=="predictive-diagnostics":
         if args.root!=Path("data"):p.error("Diagnostics uses default data root")
         return predictive_diagnostics()
