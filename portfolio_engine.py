@@ -264,14 +264,54 @@ def audit_alt(out):
         print(symbol,row["status"],flush=True)
     require(all(r["status"]=="pass" for r in out["results"]),"One or more assets blocked; inspect per-symbol results")
 
+def audit_diversification(out):
+    """Static capital sleeves, no rebalancing; daily equity diagnostic only."""
+    from itertools import combinations
+    def read(n):
+        p=ROOT/"reports"/n
+        out.setdefault("report_hashes",{})[n]=hashlib.sha256(p.read_bytes()).hexdigest()
+        with zipfile.ZipFile(p) as z:return json.loads(z.read("metrics.json"))
+    btc=read("35_candidate_portfolio.zip");alt=read("41_alt_portfolio.zip")
+    require(btc["status"]==alt["status"]=="pass","Prior report failed")
+    first,last=btc["first"],btc["last"]
+    require((first,last)==(alt["first"],alt["last"]),"Calendar mismatch")
+    out.update(first=first,last=last,results=[])
+    for fee,slip in [(5,1),(10,5)]:
+        scenarios={"BTC":[s for s in btc["scenarios"] if s["candidate"]=="C01"]}
+        scenarios.update({r["symbol"][:-4]:r["scenarios"] for r in alt["results"]})
+        require(set(scenarios)=={"BTC","TRX","NEAR"},"Unexpected universe")
+        for fraction in (.25,.5,1.):
+            selected={}
+            for name,rows in scenarios.items():
+                v,=[v for v in rows if v["fraction"]==fraction and v["fee_bps"]==fee and v["slippage_bps"]==slip]
+                eq=np.r_[1.,np.asarray(v["daily_equity"],dtype=float)]
+                require(len(eq)==(last-first)//DAY+1 and np.isfinite(eq).all() and (eq>0).all(),"Invalid daily equity")
+                require(np.isclose(eq[-1]-1,v["return"]),"Equity reconciliation")
+                selected[name]=(eq,v["ledger"])
+            names=list(selected)
+            returns=np.stack([np.diff(selected[n][0])/selected[n][0][:-1] for n in names])
+            corr=np.corrcoef(returns)
+            overlaps=[]
+            for a,b in combinations(names,2):
+                x=selected[a][1];y=selected[b][1]
+                minutes=sum(max(0,min(t["label_end"],u["label_end"])-max(t["entry_time"],u["entry_time"])) for t in x for u in y)//MIN
+                overlaps.append({"pair":[a,b],"overlap_minutes":minutes})
+            for group in [("BTC",),("BTC","TRX"),("BTC","NEAR"),("BTC","TRX","NEAR")]:
+                eq=np.mean([selected[n][0] for n in group],axis=0)
+                ret=np.diff(eq)/eq[:-1]
+                std=np.std(ret,ddof=1)
+                out["results"].append({"assets":list(group),"fraction_per_sleeve":fraction,"fee_bps":fee,"slippage_bps":slip,"return":float(eq[-1]-1),"daily_close_drawdown":float(np.max(1-eq/np.maximum.accumulate(eq))),"daily_sharpe_zero_rf":float(np.mean(ret)/std*np.sqrt(365)) if std>0 else None,"daily_equity":eq[1:].tolist(),"correlation_names":names,"correlations":corr.tolist(),"overlaps":overlaps,"terminal_sleeve_contribution":{n:float((selected[n][0][-1]-1)/len(group)) for n in group}})
+            print(fee,slip,fraction,"done",flush=True)
+
 def main():
     import argparse
-    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit','invalidation','alt'],default='incumbent');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit','invalidation','alt','diversification'],default='incumbent');args=p.parse_args()
     out={"scope":"Development diagnostic, fixed fractions not optimized; minute-open marks, actual assumed funding boundary (entry,exit], no liquidation or margin tiers; no intra-minute extrema or executable mark fills."}
+    if args.candidate=="diversification":out["scope"]="Static equal initial capital sleeves, no rebalancing or shared margin; daily-close equity drawdown only, not intraday MTM; frozen report 35/41 ledgers; exploratory, no weight optimization or holdout."
     try:
-        ({"compare":audit_cost_aware,"exit":audit_exit,"invalidation":lambda o:audit_exit(o,True),"incumbent":audit,"alt":audit_alt}[args.candidate])(out);out["status"]="pass"
+        ({"compare":audit_cost_aware,"exit":audit_exit,"invalidation":lambda o:audit_exit(o,True),"incumbent":audit,"alt":audit_alt,"diversification":audit_diversification}[args.candidate])(out);out["status"]="pass"
     except Exception:out["status"]="fail";out["error"]=traceback.format_exc()
-    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","invalidation":"37_early_invalidation.zip","incumbent":"10_portfolio.zip","alt":"41_alt_portfolio.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","invalidation":"37_early_invalidation.zip","incumbent":"10_portfolio.zip","alt":"41_alt_portfolio.zip","diversification":"42_diversification.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
