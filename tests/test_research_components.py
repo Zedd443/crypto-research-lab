@@ -72,3 +72,47 @@ def test_ridge_baseline():
     r=fit_score(f.head(180),f.tail(40),BASE_FEATURES,"ridge",{"alpha":1.},1,42)
     assert r["loss"]<r["baseline_loss"]
     assert r["test_rows"]==40
+
+
+def test_batch_funding_boundary_and_unknown():
+    import numpy as np
+    from research_engine import costs
+    f=pl.DataFrame({"symbol":["BTC","BTC"],"event_time":[100,150],"funding_rate":[.002,.001],"mark_price":[100.,105.]})
+    t=pl.DataFrame({"symbol":["BTC","BTC"],"entry_time":[100,100],"label_end":[150,150],
+        "entry_price":[100.,100.],"exit_price":[110.,110.],"side":[1,-1]})
+    fund=(f,np.array([100,150]),np.array([0.,.2,.305]),np.array([0,0,0]))
+    args=[t[c].to_numpy() for c in ["entry_time","label_end","entry_price","exit_price","side"]]
+    expected=score_trades(t,5,1,f,{"BTC":[(0,300)]})["net_return"].to_numpy()
+    assert np.allclose(costs(*args,fund,5,1),expected)
+    bad=(f,fund[1],fund[2],np.array([0,0,1]))
+    assert np.isnan(costs(*args,bad,5,1)).all()
+
+def test_batch_wallet_shared_capacity(monkeypatch):
+    import numpy as np
+    import research_engine as r
+    e=r.A+r.MIN; z=e+2*r.MIN
+    def marks(e,z,symbol):
+        return pl.DataFrame({"event_time":np.arange(e,z,r.MIN),"open":[100.] * ((z-e)//r.MIN)}),[]
+    monkeypatch.setattr(r,"mark_window",marks)
+    funds={}; signals=[]
+    for i in range(6):
+        symbol="TEST"+str(i)
+        f=pl.DataFrame({"symbol":[symbol],"event_time":[r.A],"funding_rate":[0.],"mark_price":[100.]})
+        funds[symbol]=(f,np.array([r.A]),np.array([0.,0.]),np.array([0,0]))
+        net=r.costs(np.array([e]),np.array([z]),np.array([100.]),np.array([101.]),1,funds[symbol],5,1)[0]
+        signals.append({"symbol":symbol,"decision_time":e-15*r.MIN,"entry_time":e,"label_end":z,
+                        "entry_price":100.,"exit_price":101.,"side":1,"priority":float(i),
+                        "fold":0,"standard":float(net),"stress":float(net)})
+    out={}
+    r.wallet(signals,funds,r.A,r.A+2*r.DAY,5,1,out)
+    assert out["status"]=="pass"
+    assert out["trades"]==5 and out["max_open"]==5
+    assert out["rejected"]=={"slots":1}
+    assert "TEST0" not in out["trades_per_symbol"]
+    assert out["max_mtm_drawdown"]>0 and out["return_fraction"]>0
+    # Future missing funding is not an entry-time rejection feature.
+    signals[-1]["standard"]=None
+    blocked={}
+    with pytest.raises(ValueError,match="unknown funding"):
+        r.wallet(signals,funds,r.A,r.A+2*r.DAY,5,1,blocked)
+    assert blocked["blocked_trade"]["symbol"]=="TEST5"
