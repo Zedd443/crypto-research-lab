@@ -22,6 +22,7 @@ from data_engine import aggregate
 from execution_engine import score_trades
 from portfolio_engine import mark_window
 from resource_policy import budget,tree_rss
+from universe import CRYPTO_SYMBOLS
 
 ROOT=Path("data")
 MIN=60000
@@ -189,9 +190,17 @@ def inner_score(signals,first,last):
         row["score"]=float(daily.mean()/sd*np.sqrt(365))
     return row
 
-def search_fold(symbol,ds_all,fold):
+def search_fold(symbol,ds_all,fold,fit_baseline=False):
     cut=fold.train_start+120*DAY
-    trials=[]
+    trials=[];baseline=[]
+    if fit_baseline:
+        ds=ds_all[("1h",4)]
+        train=(ds["d"]>=fold.train_start)&(ds["z"]<fold.test_start)
+        test=(ds["d"]>=fold.test_start)&(ds["z"]<fold.test_end)
+        p=predict(ds,"binary",1.,train,test)
+        require(p is not None,"Cannot fit fixed baseline")
+        baseline=opportunities(ds,test,p,.7,"fixed")
+        for t in baseline:t.update(symbol=symbol,priority=0.,fold=fold.fold_id)
     def evaluate(tf,h,target,C):
         ds=ds_all[(tf,h)]
         train=(ds["d"]>=fold.train_start)&(ds["z"]<cut)
@@ -211,7 +220,7 @@ def search_fold(symbol,ds_all,fold):
         best=max(eligible,key=lambda r:r["score"])
         for C in SPEC["refine_C"]:evaluate(best["tf"],best["horizon"],best["target"],C)
     eligible=[r for r in trials if r["score"] is not None]
-    if not eligible:return {"fold":fold.fold_id,"choice":None,"trials":trials,"signals":[]}
+    if not eligible:return {"fold":fold.fold_id,"choice":None,"trials":trials,"signals":[],"baseline":baseline}
     best=max(eligible,key=lambda r:r["score"])
     ds=ds_all[(best["tf"],best["horizon"])]
     train=(ds["d"]>=fold.train_start)&(ds["z"]<fold.test_start)
@@ -220,7 +229,7 @@ def search_fold(symbol,ds_all,fold):
     require(p is not None,"Selected configuration cannot refit")
     signals=opportunities(ds,test,p,best["threshold"],best["exit"])
     for t in signals:t.update(symbol=symbol,priority=best["score"],fold=fold.fold_id)
-    return {"fold":fold.fold_id,"choice":best,"trials":trials,"signals":signals}
+    return {"fold":fold.fold_id,"choice":best,"trials":trials,"signals":signals,"baseline":baseline}
 
 def baseline_signals(symbol,paths,funding,folds):
     require({p.stem for p in paths}=={str(f.fold_id) for f in folds},"Missing frozen baseline folds "+symbol)
@@ -351,22 +360,27 @@ def run(assets):
                         p=ROOT/"funding_repairs"/"BTCUSDT.json"
                         if p.exists():sources.append(p)
                         paths=sorted((folder/"predictions").glob("*.parquet"))
-                    else:paths=sorted((ROOT/"multi_asset"/oldrows[symbol]["experiment"]/"predictions").glob("*.parquet"))
-                    key={"symbol":symbol,"protocol":SPEC,"source":digest(sources),"baseline_source":digest(paths),
+                    elif symbol in oldrows:paths=sorted((ROOT/"multi_asset"/oldrows[symbol]["experiment"]/"predictions").glob("*.parquet"))
+                    else:paths=[]
+                    if symbol=="BTCUSDT" or symbol in oldrows:require(paths,"Frozen baseline cache missing "+symbol)
+                    fit_baseline=not paths
+                    row["baseline_mode"]="new_fixed_fold_fit" if fit_baseline else "frozen_cache"
+                    key={"symbol":symbol,"protocol":SPEC,"source":digest(sources),"baseline_source":("new_fixed_fold_fit" if fit_baseline else digest(paths)),
                          "code":code,"numpy":np.__version__,"polars":pl.__version__,"sklearn":sklearn.__version__}
                     row["identity"]=identity(key)
                     funding=load_funding(symbol)
                     row["unknown_funding_events"]=int(funding[3][-1])
+                    row["unknown_funding_event_times"]=funding[1][np.diff(funding[3])>0].tolist()
                     cache_id=identity({"raw":digest(raw),"builder":digest([Path("research_engine.py"),Path("feature_engine.py"),Path("data_engine.py")]),"polars":pl.__version__,"numpy":np.__version__,"TFS":TFS,"features":COLS,"horizons":HORIZONS})
                     completed=root/"folds"/row["identity"]
                     ds=None if all((completed/(str(f.fold_id)+".json")).exists() for f in folds) else build(symbol,raw,funding,root/"datasets"/cache_id)
-                    signals=[]
+                    signals=[];base=[]
                     for fold in folds:
-                        result=checkpoint(root/"folds",key,fold.fold_id,lambda:search_fold(symbol,ds,fold))
-                        signals.extend(result["signals"])
-                        row["folds"].append({**{k:v for k,v in result.items() if k!="signals"},"outer_signals":len(result["signals"])})
+                        result=checkpoint(root/"folds",key,fold.fold_id,lambda:search_fold(symbol,ds,fold,fit_baseline))
+                        signals.extend(result["signals"]);base.extend(result["baseline"])
+                        row["folds"].append({**{k:v for k,v in result.items() if k not in ("signals","baseline")},"outer_signals":len(result["signals"]),"new_baseline_signals":len(result["baseline"])})
                         print(symbol,"fold",fold.fold_id,"done",flush=True)
-                    base=baseline_signals(symbol,paths,funding,folds)
+                    if not fit_baseline:base=baseline_signals(symbol,paths,funding,folds)
                     all_signals.extend(signals);baseline.extend(base);funds[symbol]=funding
                     row.update(status="pass",outer_signals=len(signals),baseline_signals=len(base),rss_bytes=tree_rss())
                     del ds
@@ -376,7 +390,7 @@ def run(assets):
                     ds=None
             require(funds,"No asset completed")
             out["assets_completed"]=list(funds)
-            for name,signals in [("frozen_binary",baseline),("nested_joint_search",all_signals)]:
+            for name,signals in [("fixed_binary",baseline),("nested_joint_search",all_signals)]:
                 for fee,slip in COSTS:
                     row={"strategy":name,"fee_bps":fee,"slippage_bps":slip};out["portfolios"].append(row)
                     try:wallet(signals,funds,first,last,fee,slip,row)
@@ -393,6 +407,6 @@ def run(assets):
 if __name__=="__main__":
     import argparse
     p=argparse.ArgumentParser()
-    p.add_argument("--symbols",nargs="+",choices=ASSETS,default=ASSETS)
+    p.add_argument("--symbols",nargs="+",choices=CRYPTO_SYMBOLS,default=ASSETS)
     a=p.parse_args()
     raise SystemExit(run(list(dict.fromkeys(a.symbols))))
