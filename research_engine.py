@@ -577,7 +577,7 @@ def transfer_fit_fold(frame,fold):
     train=frame.filter((pl.col("decision_time")>=fold.train_start)&(pl.col("label_end")<fold.test_start)&
                        pl.col("entry_price").is_not_null()&pl.col("exit_price").is_not_null())
     test=frame.filter((pl.col("decision_time")>=fold.test_start)&(pl.col("label_end")<fold.test_end))
-    expected=(fold.test_start-fold.train_start)//H-5
+    expected=(fold.test_start-fold.train_start-15*MIN-4*H-1)//H+1
     row={"fold":fold.fold_id,"train_rows":train.height,"expected_train_rows":expected,
          "test_rows":test.height,"signals":[]}
     if train.height<TRANSFER_SPEC["min_train_coverage"]*expected:
@@ -681,6 +681,12 @@ def transfer_summary(signals,first,last,bootstrap=False):
         v=edge_stats(rows,which,first,last,ci_on)
         v["unknown_outcomes"]=v.pop("unknown_funding_signals")
         v.pop("matched_direction_comparator",None)
+        by_symbol={}
+        for t in rows:
+            if t[which] is not None:by_symbol.setdefault(t["symbol"],[]).append(t[which])
+        means=[float(np.mean(x)) for x in by_symbol.values()]
+        v["equal_symbol_mean_expectancy"]=float(np.mean(means)) if means else None
+        v["symbols_with_scored_signals"]=len(means)
         return v
     result={}
     for name,rows in (("all_opportunities",signals),("per_symbol_nonoverlap",nonoverlap(signals))):
