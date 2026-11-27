@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 import sklearn
 from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
 from baseline_engine import digest
@@ -33,14 +34,15 @@ RULES=("fixed","half_invalidation")
 COLS=[c for c in BASE_FEATURES if c!="body"]
 COSTS=((5,1),(10,5))
 SPEC={"timeframes":TFS,"horizons_hours":HORIZONS,"thresholds":THRESHOLDS,
-      "targets":["binary","cost_aware"],"coarse_C":1.,"refine_C":[.1,10.],
+      "models":["logistic","shallow_tree"],"targets":["binary","cost_aware"],"coarse_C":1.,"refine_C":[.1,10.],
+      "tree":{"max_depth":3,"min_samples_leaf":.05},"rule_features":["ret_4","ret_16"],"rule_quantiles":[.80,.95],"rule_directions":["momentum","reversal"],
       "refine_families":1,"exit_rules":RULES,"features":COLS,
-      "delay_minutes":15,"train_days":180,"inner_fit_days":120,"inner_validation_days":60,
+      "delay_minutes":15,"train_days":180,"inner_fit_days":120,"inner_validation_days":30,"inner_windows":2,
       "outer_test_days":30,"seed":42,"edge_shrinkage_zero_prior_trades":10,
-      "objective":"positive primary and stress nonoverlap expectancy; rank stress expectancy shrunk toward zero for sparse evidence; abstain if none; no trade frequency quota",
+      "objective":"positive primary net nonoverlap expectancy; rank primary expectancy shrunk toward zero for sparse evidence across two chronological inner windows; stress sensitivity reported, not a hard veto; abstain if none; no frequency quota",
       "costs_bps":COSTS,
       "execution":"decision then 15m delay; retain all signal opportunities; separate per-symbol decision-time nonoverlap diagnostic; no shared capital, leverage, margin, or slot constraints",
-      "funding":"strict 8h schedule; no unknown funding imputation; inner candidate unscorable if selected nonoverlap outcome unknown; outer report retains all signals and labels known-only statistics conditional",
+      "funding":"strict 8h schedule; no unknown funding imputation; common known-cost inner validation mask across horizons/exit variants; outer retains all signals, unknown outcomes explicitly conditional",
       "holdout_excluded":True}
 
 def require(ok,msg):
@@ -136,14 +138,18 @@ def build(symbol,raw,funding,cache):
             l=variants[(1,"fixed")][2];s=variants[(-1,"fixed")][2]
             require(not np.any((l>0)&(s>0)),"Ambiguous cost target")
             y=np.where(l>0,1,np.where(s>0,-1,0))
-            datasets[(tf,horizon)]={"d":d,"e":e,"z":z,"ep":ep,"xp":xp,"x":x,
+            # Funding availability is an ex-post evaluation mask, never an outer entry feature.
+            _,ft,_,bad=funding
+            a=np.searchsorted(ft,e,side="right");b=np.searchsorted(ft,e+max(HORIZONS)*H,side="right")
+            common_known=bad[a]==bad[b]
+            datasets[(tf,horizon)]={"d":d,"e":e,"z":z,"ep":ep,"xp":xp,"x":x,"common_known":common_known,
                 "binary":np.where(xp>ep,1,-1),"cost_aware":y,"known":np.isfinite(l)&np.isfinite(s),
                 "variants":variants}
     return datasets
 
-def predict(ds,target,C,train,test):
-    # Only historical training rows with known realized funding enter either target.
-    train=train&ds["known"]
+def predict(ds,target,C,train,test,model_name="logistic"):
+    # Binary direction needs only price labels; cost-aware target needs known realized costs.
+    if target=="cost_aware":train=train&ds["known"]
     y=ds[target][train]
     expected=np.array([-1,1] if target=="binary" else [-1,0,1])
     if train.sum()<100 or test.sum()<30 or not np.array_equal(np.unique(y),expected):
@@ -151,21 +157,27 @@ def predict(ds,target,C,train,test):
     with threadpool_limits(limits=1):
         scale=StandardScaler()
         x=scale.fit_transform(ds["x"][train]);v=scale.transform(ds["x"][test])
-        model=LogisticRegression(C=C,max_iter=500,random_state=42).fit(x,y)
+        if model_name=="logistic":model=LogisticRegression(C=C,max_iter=500,random_state=42)
+        elif model_name=="shallow_tree":model=DecisionTreeClassifier(**SPEC["tree"],random_state=42)
+        else:raise ValueError("Unknown model "+model_name)
+        model.fit(x,y)
         p=model.predict_proba(v)
     require(np.array_equal(model.classes_,expected) and np.isfinite(p).all(),"Invalid predictions")
     return p[:,0],p[:,-1]
 
-def opportunities(ds,test,p,threshold,rule):
+def opportunities(ds,test,p,threshold,rule,side=None):
     ix=np.flatnonzero(test)
-    side=np.where(p[1]>=threshold,1,np.where(p[0]>=threshold,-1,0))
+    if side is None:side=np.where(p[1]>=threshold,1,np.where(p[0]>=threshold,-1,0))
+    require(len(side)==len(ix),"Signal mask mismatch")
     hit=np.flatnonzero(side)
     result=[]
     for j in hit:
         i=ix[j];v=int(side[j]);end,xp,standard,stress=ds["variants"][(v,rule)]
         result.append({"decision_time":int(ds["d"][i]),"entry_time":int(ds["e"][i]),
             "label_end":int(end[i]),"entry_price":float(ds["ep"][i]),"exit_price":float(xp[i]),"side":v,
-            "p_short":float(p[0][j]),"p_long":float(p[1][j]),"threshold":threshold,"exit_rule":rule,
+            "p_short":float(p[0][j]) if p is not None else None,"p_long":float(p[1][j]) if p is not None else None,"threshold":threshold,"exit_rule":rule,
+            "opposite_standard":float(ds["variants"][(-v,rule)][2][i]) if np.isfinite(ds["variants"][(-v,rule)][2][i]) else None,
+            "opposite_stress":float(ds["variants"][(-v,rule)][3][i]) if np.isfinite(ds["variants"][(-v,rule)][3][i]) else None,
             "standard":float(standard[i]) if np.isfinite(standard[i]) else None,
             "stress":float(stress[i]) if np.isfinite(stress[i]) else None})
     return result
@@ -193,14 +205,31 @@ def inner_score(signals,first,last):
     require(all(first<=t["decision_time"]<t["label_end"]<last for t in selected),"Inner signal outside validation")
     row.update(primary_expectancy=float(primary.mean()),stress_expectancy=float(stress.mean()),
                primary_pnl=float(primary.sum()),stress_pnl=float(stress.sum()))
-    if primary.mean()>0 and stress.mean()>0:
-        row["score"]=float(stress.sum()/(n+SPEC["edge_shrinkage_zero_prior_trades"]))
-    else:row["reason"]="nonpositive_net_expectancy"
+    if primary.mean()>0:
+        row["score"]=float(primary.sum()/(n+SPEC["edge_shrinkage_zero_prior_trades"]))
+    else:row["reason"]="nonpositive_primary_expectancy"
     return row
 
+def rule_signals(ds,train,test,feature,quantile,direction):
+    """Causal magnitude cutoff fitted on historical features only; no fake probabilities."""
+    col=COLS.index(feature);x=ds["x"][:,col]
+    if train.sum()<100 or test.sum()<30:return None
+    cutoff=float(np.quantile(np.abs(x[train]),quantile))
+    v=x[test];side=np.where(np.abs(v)>cutoff,np.sign(v),0).astype(int)
+    return side if direction=="momentum" else -side
+
+def inner_masks(ds,fold):
+    """Two forward windows, purge actual full target end before every boundary."""
+    first=fold.train_start+120*DAY
+    for lo in (first,first+30*DAY):
+        hi=lo+30*DAY
+        require(hi<=fold.test_start,"Inner window exceeds outer train")
+        train=(ds["d"]>=fold.train_start)&(ds["z"]<lo)
+        candidate=(ds["d"]>=lo)&(ds["z"]<hi)
+        yield train,candidate&ds["common_known"],lo,hi,int(candidate.sum())
+
 def search_fold(symbol,ds_all,fold,fit_baseline=False):
-    cut=fold.train_start+120*DAY
-    trials=[];baseline=[]
+    trials=[];baseline=[];first=fold.train_start+120*DAY
     if fit_baseline:
         ds=ds_all[("1h",4)]
         train=(ds["d"]>=fold.train_start)&(ds["z"]<fold.test_start)
@@ -208,35 +237,65 @@ def search_fold(symbol,ds_all,fold,fit_baseline=False):
         p=predict(ds,"binary",1.,train,test)
         require(p is not None,"Cannot fit fixed baseline")
         baseline=opportunities(ds,test,p,.7,"fixed")
-        for t in baseline:t.update(symbol=symbol,fold=fold.fold_id,tf="1h",horizon_hours=4,target="binary",C=1.)
-    def evaluate(tf,h,target,C):
+        for t in baseline:t.update(symbol=symbol,fold=fold.fold_id,tf="1h",horizon_hours=4,target="binary",C=1.,model="logistic")
+
+    def evaluate(tf,h,model,target=None,C=None,feature=None,quantile=None,direction=None):
         ds=ds_all[(tf,h)]
-        train=(ds["d"]>=fold.train_start)&(ds["z"]<cut)
-        val=(ds["d"]>=cut)&(ds["z"]<fold.test_start)
-        p=predict(ds,target,C,train,val)
-        if p is None:
-            trials.append({"tf":tf,"horizon":h,"target":target,"C":C,"score":None,"reason":"insufficient rows/classes"})
-            return
+        windows=[]
+        spec={"tf":tf,"horizon":h,"model":model,"target":target,"C":C,
+              "feature":feature,"quantile":quantile,"direction":direction}
+        for train,val,lo,hi,total in inner_masks(ds,fold):
+            if model=="rule":
+                side=rule_signals(ds,train,val,feature,quantile,direction);p=None
+                if side is None:break
+            else:
+                p=predict(ds,target,C,train,val,model);side=None
+                if p is None:break
+            windows.append((val,p,side,lo,hi,total))
+        if len(windows)!=2:
+            trials.append({**spec,"score":None,"reason":"insufficient rows/classes"});return
+        # Threshold/exit search reuses the same trained predictions.
         for rule in RULES:
-            for th in THRESHOLDS:
-                row=inner_score(opportunities(ds,val,p,th,rule),cut,fold.test_start)
-                trials.append({"tf":tf,"horizon":h,"target":target,"C":C,"exit":rule,"threshold":th,**row})
+            for th in ([None] if model=="rule" else THRESHOLDS):
+                signals=[];diagnostics=[]
+                for val,p,side,lo,hi,total in windows:
+                    v=opportunities(ds,val,p,th,rule,side)
+                    signals.extend(v)
+                    d=inner_score(v,lo,hi)
+                    diagnostics.append({"start":lo,"end":hi,"eligible_rows":int(val.sum()),
+                                        "candidate_rows":total,**d})
+                row=inner_score(signals,first,fold.test_start)
+                trials.append({**spec,"exit":rule,"threshold":th,"inner_windows":diagnostics,**row})
     for tf,h in ds_all:
-        for target in SPEC["targets"]:evaluate(tf,h,target,1.)
-    eligible=[r for r in trials if r["score"] is not None]
+        for model in SPEC["models"]:
+            for target in SPEC["targets"]:
+                evaluate(tf,h,model,target,1. if model=="logistic" else None)
+        for feature in SPEC["rule_features"]:
+            for quantile in SPEC["rule_quantiles"]:
+                for direction in SPEC["rule_directions"]:
+                    evaluate(tf,h,"rule",feature=feature,quantile=quantile,direction=direction)
+    # Refine the best eligible logistic family even when a rule/tree wins coarse search.
+    eligible=[r for r in trials if r["score"] is not None and r["model"]=="logistic"]
     if eligible:
         best=max(eligible,key=lambda r:r["score"])
-        for C in SPEC["refine_C"]:evaluate(best["tf"],best["horizon"],best["target"],C)
+        for C in SPEC["refine_C"]:evaluate(best["tf"],best["horizon"],"logistic",best["target"],C)
     eligible=[r for r in trials if r["score"] is not None]
     if not eligible:return {"fold":fold.fold_id,"choice":None,"trials":trials,"signals":[],"baseline":baseline}
     best=max(eligible,key=lambda r:r["score"])
     ds=ds_all[(best["tf"],best["horizon"])]
     train=(ds["d"]>=fold.train_start)&(ds["z"]<fold.test_start)
     test=(ds["d"]>=fold.test_start)&(ds["z"]<fold.test_end)
-    p=predict(ds,best["target"],best["C"],train,test)
-    require(p is not None,"Selected configuration cannot refit")
-    signals=opportunities(ds,test,p,best["threshold"],best["exit"])
-    for t in signals:t.update(symbol=symbol,fold=fold.fold_id,tf=best["tf"],horizon_hours=best["horizon"],target=best["target"],C=best["C"],inner_edge_score=best["score"])
+    if best["model"]=="rule":
+        side=rule_signals(ds,train,test,best["feature"],best["quantile"],best["direction"]);p=None
+        require(side is not None,"Selected rule cannot refit")
+    else:
+        p=predict(ds,best["target"],best["C"],train,test,best["model"]);side=None
+        require(p is not None,"Selected model cannot refit")
+    signals=opportunities(ds,test,p,best["threshold"],best["exit"],side)
+    for t in signals:
+        t.update(symbol=symbol,fold=fold.fold_id,tf=best["tf"],horizon_hours=best["horizon"],
+                 target=best["target"],C=best["C"],model=best["model"],feature=best["feature"],
+                 quantile=best["quantile"],direction=best["direction"],inner_edge_score=best["score"])
     return {"fold":fold.fold_id,"choice":best,"trials":trials,"signals":signals,"baseline":baseline}
 
 def baseline_signals(symbol,paths,funding,folds):
@@ -253,8 +312,11 @@ def baseline_signals(symbol,paths,funding,folds):
         if not v.height:continue
         e,z,ep,xp,side=[v[k].to_numpy() for k in ("entry_time","label_end","entry_price","exit_price","side")]
         net=[costs(e,z,ep,xp,side,funding,*c) for c in COSTS]
+        opposite=[costs(e,z,ep,xp,-side,funding,*c) for c in COSTS]
         for i,t in enumerate(v.select("symbol","decision_time","entry_time","label_end","entry_price","exit_price","side","p_long","p_short").iter_rows(named=True)):
-            t.update(fold=f.fold_id,tf="1h",horizon_hours=4,target="binary",C=1.,threshold=.7,exit_rule="fixed",standard=float(net[0][i]) if np.isfinite(net[0][i]) else None,
+            t.update(fold=f.fold_id,tf="1h",horizon_hours=4,target="binary",model="logistic",C=1.,threshold=.7,exit_rule="fixed",
+                     opposite_standard=float(opposite[0][i]) if np.isfinite(opposite[0][i]) else None,
+                     opposite_stress=float(opposite[1][i]) if np.isfinite(opposite[1][i]) else None,standard=float(net[0][i]) if np.isfinite(net[0][i]) else None,
                      stress=float(net[1][i]) if np.isfinite(net[1][i]) else None)
             result.append(t)
     return result
@@ -276,6 +338,11 @@ def edge_stats(signals,which,first,last,bootstrap=False):
                profit_factor=float(r[r>0].sum()/loss) if loss>0 else None,
                sum_unit_notional_returns=float(r.sum()),
                no_losses=bool(loss==0))
+    paired=[t for t in known if t.get("opposite_"+which) is not None]
+    row["matched_direction_comparator"]={"pairs":len(paired),"chosen_minus_equal_random_direction_expectancy":None,"opposite_expectancy":None}
+    if paired:
+        delta=np.array([(t[which]-t["opposite_"+which])/2 for t in paired])
+        row["matched_direction_comparator"].update(chosen_minus_equal_random_direction_expectancy=float(delta.mean()),opposite_expectancy=float(np.mean([t["opposite_"+which] for t in paired])))
     if bootstrap:
         # Calendar blocks preserve simultaneous cross-asset dependence.
         n=(last-first)//DAY
@@ -333,7 +400,7 @@ def run(assets):
             out.update(first=first,last=last)
             code=digest([Path(n) for n in ["research_engine.py","data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","experiment_store.py","baseline_engine.py","funding_repair_engine.py","robustness_engine.py"]])
             # Keep selection identity independent of final report presentation.
-            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,nonoverlap,inner_score,search_fold,load_funding))).encode()).hexdigest()
+            model_code=hashlib.sha256((digest([Path(n) for n in ["data_engine.py","feature_engine.py","validation_protocol.py","execution_engine.py","funding_repair_engine.py","robustness_engine.py"]])+"".join(inspect.getsource(f) for f in (base_arrays,build,costs,predict,opportunities,nonoverlap,inner_score,rule_signals,inner_masks,search_fold,load_funding))).encode()).hexdigest()
             builder_code=hashlib.sha256((digest([Path("data_engine.py"),Path("feature_engine.py")])+inspect.getsource(base_arrays)).encode()).hexdigest()
             search_spec=SPEC
             out.update(code_hash=code,model_code_hash=model_code)
@@ -356,7 +423,7 @@ def run(assets):
                     raw_hash=digest(raw)
                     funding=load_funding(symbol)
                     funding_hash=hashlib.sha256(funding[0].write_csv().encode()).hexdigest()
-                    row.update(raw_hash=raw_hash,funding_ledger_hash=funding_hash,all_source_hash=digest(sources),
+                    row.update(raw_hash=raw_hash,funding_ledger_hash=funding_hash,source_paths=[str(p) for p in sources],
                                baseline_prediction_hash=digest(paths) if paths else None)
                     key={"symbol":symbol,"protocol":search_spec,"raw":raw_hash,"funding":funding_hash,
                          "fit_baseline":fit_baseline,"code":model_code,"numpy":np.__version__,
