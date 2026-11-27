@@ -48,7 +48,7 @@ def audit_symbol(r,first,last,out):
     for tr in t.iter_rows(named=True):
         holes=missing[(missing>tr["entry_time"])&(missing<=tr["label_end"])]
         if len(holes):affected.append({"entry_time":tr["entry_time"],"label_end":tr["label_end"],"missing_funding_times":holes.tolist()})
-    out.update({"missing_marks":missing.tolist(),"affected_trades":affected,"trade_count":t.height,"source_hash":digest(sources+[Path(__file__),Path("execution_engine.py")])})
+    out.update({"missing_marks":missing.tolist(),"affected_trades":affected,"trade_count":t.height,"source_hash":digest(sources+[Path("multi_asset_funding_engine.py"),Path("execution_engine.py")])})
     if affected:
         out["status"]="funding_repair_required";return
     fund=fund.filter(valid).with_columns(pl.lit(symbol).alias("symbol")).select("symbol","event_time","funding_rate","mark_price")
