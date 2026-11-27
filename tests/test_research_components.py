@@ -101,9 +101,72 @@ def test_batch_signal_edge_no_shared_capital():
     assert edge_stats(all_signals,"standard",A,A+DAY)["signals"]==101
     # Sparse positive evidence is eligible, but shrunk rather than forced to trade.
     score=inner_score(signals[:1],A,A+DAY)
-    assert score["score"]==pytest.approx(.01/11)
+    assert score["score"]==pytest.approx(.02/11)
     missing={**signals[0],"standard":None,"stress":None}
     result=edge_stats([missing,signals[1]],"standard",A,A+DAY)
     assert result["signals"]==2 and result["scored_signals"]==1
     assert result["unknown_funding_signals"]==1 and result["coverage"]==.5
     assert inner_score([missing],A,A+DAY)["score"] is None
+
+
+def test_batch_primary_edge_not_vetoed_by_stress():
+    from research_engine import inner_score,A,DAY
+    t={"symbol":"BTC","decision_time":A,"entry_time":A+60000,
+       "label_end":A+3600000,"standard":.002,"stress":-.001}
+    r=inner_score([t],A,A+DAY)
+    assert r["score"]==pytest.approx(.002/11)
+    assert r["stress_expectancy"]<0
+
+def test_batch_inner_masks_purge_common_horizon_and_missing_funding():
+    import numpy as np
+    import research_engine as r
+    from validation_protocol import Fold
+    fold=Fold(0,r.A,r.A+180*r.DAY,r.A+210*r.DAY)
+    d=np.arange(r.A,fold.test_end,r.H)
+    ds={"d":d,"e":d+15*r.MIN,"z":d+15*r.MIN+4*r.H,
+        "common_known":np.ones(len(d),dtype=bool)}
+    ds["common_known"][120*24+1]=False
+    windows=list(r.inner_masks(ds,fold))
+    assert len(windows)==2
+    for train,val,lo,hi,total in windows:
+        assert ds["z"][train].max()<lo
+        assert ds["d"][val].min()>=lo
+        assert (ds["e"][val]+24*r.H).max()<hi
+        assert hi<=fold.test_start
+        assert ds["common_known"][val].all()
+        assert total>=val.sum()
+
+def test_batch_rule_cutoff_is_train_only():
+    import numpy as np
+    import research_engine as r
+    x=np.zeros((160,len(r.COLS)))
+    k=r.COLS.index("ret_4")
+    x[:,k]=np.linspace(-1,1,160)
+    train=np.arange(160)<120;test=~train
+    a=r.rule_signals({"x":x},train,test,"ret_4",.8,"momentum")
+    changed=x.copy();changed[test,k]*=2
+    b=r.rule_signals({"x":changed},train,test,"ret_4",.8,"momentum")
+    cutoff=np.quantile(np.abs(x[train,k]),.8)
+    expected=np.where(np.abs(changed[test,k])>cutoff,np.sign(changed[test,k]),0)
+    assert np.array_equal(b,expected)
+    assert np.array_equal(-a,r.rule_signals({"x":x},train,test,"ret_4",.8,"reversal"))
+
+def test_batch_vectorized_inner_matches_signal_ledger():
+    import numpy as np
+    import research_engine as r
+    d=r.A+np.arange(8)*r.H;e=d+15*r.MIN;z=e+2*r.H
+    long=(z,np.full(8,101.),np.linspace(-.01,.03,8),np.linspace(-.02,.02,8))
+    short=(z,np.full(8,99.),-long[2],-long[3])
+    ds={"d":d,"e":e,"ep":np.full(8,100.),"variants":{(1,"fixed"):long,(-1,"fixed"):short}}
+    test=np.ones(8,dtype=bool);p=(np.array([.2,.8,.2,.8,.2,.8,.2,.8]),np.array([.8,.2,.8,.2,.8,.2,.8,.2]))
+    rows=r.opportunities(ds,test,p,.7,"fixed")
+    n,a,b=r.inner_outcomes(ds,test,p,.7,"fixed")
+    assert r.summarize_inner(n,a,b)==r.inner_score(rows,r.A,r.A+r.DAY)
+    assert len(rows)==8 and n==8
+
+def test_batch_matched_direction_control():
+    from research_engine import edge_stats,A,DAY
+    rows=[{"standard":.01,"opposite_standard":-.03},{"standard":.03,"opposite_standard":-.01}]
+    result=edge_stats(rows,"standard",A,A+DAY)
+    assert result["expectancy"]==pytest.approx(.02)
+    assert result["matched_direction_comparator"]["chosen_minus_equal_random_direction_expectancy"]==pytest.approx(.02)
