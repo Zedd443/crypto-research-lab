@@ -17,14 +17,14 @@ MIN=60000
 def require(ok,msg):
     if not ok:raise ValueError(msg)
 
-def mark_window(e,z):
+def mark_window(e,z,symbol="BTCUSDT"):
     months={datetime.fromtimestamp(t/1000,timezone.utc).strftime("%Y-%m") for t in (e,z-1)}
-    paths=[ROOT/"mark"/"BTCUSDT"/(m+".parquet") for m in sorted(months)]
+    paths=[ROOT/"mark"/symbol/(m+".parquet") for m in sorted(months)]
     if not all(p.exists() for p in paths):
         return None,[str(p) for p in paths if not p.exists()]
     x=pl.scan_parquet(paths).filter(pl.col("event_time").is_between(e,z,closed="left")).select("event_time","open").collect()
     for month in sorted(months):
-        p=ROOT/"mark_repairs"/"BTCUSDT"/(month+".parquet")
+        p=ROOT/"mark_repairs"/symbol/(month+".parquet")
         if p.exists():
             meta=json.loads(p.with_suffix(".json").read_text())
             require(hashlib.sha256(p.read_bytes()).hexdigest()==meta["overlay_sha256"],"Repair hash mismatch")
@@ -38,7 +38,7 @@ def mark_audit(trades):
     for t in trades.iter_rows(named=True):
         e=int(t["entry_time"]);z=int(t["label_end"])
         expected=np.arange(e,z,MIN); expected_total+=len(expected)
-        x,absent=mark_window(e,z)
+        x,absent=mark_window(e,z,t["symbol"])
         ts=x["event_time"].to_numpy() if x is not None else np.array([],dtype=np.int64)
         px=x["open"].cast(pl.Float64).to_numpy() if x is not None else np.array([])
         missing=np.setdiff1d(expected,ts)
@@ -55,7 +55,7 @@ def replay(trades,marks,fraction,first,last,fee):
     equity=1.; peak=1.; dd=0.; equity_daily={}; curve=[]; records=[]
     for t in trades.iter_rows(named=True):
         e=int(t["entry_time"]); z=int(t["label_end"]); side=t["side"]
-        x,absent=mark_window(e,z)
+        x,absent=mark_window(e,z,t["symbol"])
         require(x is not None and not absent,"Missing mark partition")
         ts=x["event_time"].to_numpy(); px=x["open"].to_numpy()
         require(np.array_equal(ts,np.arange(e,z,MIN)),"Missing intratrade mark minute")
@@ -207,14 +207,71 @@ def audit_exit(out, conditional=False):
                 out["results"].append({"candidate":name,"holding_minutes":minutes,"early_exits":trades.filter(pl.col("label_end")-pl.col("entry_time")<240*MIN).height,"fee_bps":fee,"slippage_bps":slip,"economics":metrics(scored,first,last),"portfolio":result})
                 print(name,minutes,fee,slip,"done",flush=True)
 
+def audit_alt(out):
+    from multi_asset_funding_engine import audit_symbol
+    from baseline_engine import digest
+    def read_report(n):
+        with zipfile.ZipFile(ROOT/"reports"/n) as z:return json.loads(z.read("metrics.json"))
+    transfer=read_report("39_extended_transfer.zip")
+    funding=read_report("40_extended_funding.zip")
+    require(funding["status"]=="pass","Funding audit not passed")
+    folder,=list((ROOT/"experiments").glob(PREFIX+"*"))
+    man=json.loads((folder/"manifest.json").read_text())
+    first,last=man["folds"][0]["test_start"],man["folds"][-1]["test_end"]
+    out.update(first=first,last=last,results=[],mark_coverage={})
+    for symbol in ("TRXUSDT","NEARUSDT"):
+        row={"symbol":symbol,"scenarios":[]}
+        out["results"].append(row)
+        try:
+            r=next(r for r in transfer["results"] if r["symbol"]==symbol)
+            ref=next(r for r in funding["results"] if r["symbol"]==symbol)
+            require(r["status"]==ref["status"]=="pass","Prior audit failed")
+            paths=sorted((ROOT/"multi_asset"/r["experiment"]/"predictions").glob("*.parquet"))
+            require({p.stem for p in paths}=={str(f["fold_id"]) for f in man["folds"]},"Fold mismatch")
+            f=pl.read_parquet(paths).sort("decision_time")
+            require(f["symbol"].unique().to_list()==[symbol] and f["decision_time"].n_unique()==f.height and f.height==r["oos_rows"] and f["decision_time"].min()>=first and f["label_end"].max()<last,"Prediction scope mismatch")
+            t=pick(f,"logistic",.7)
+            require(t.height==ref["trade_count"] and np.all(t["entry_time"].to_numpy()[1:]>=t["label_end"].to_numpy()[:-1]),"Trade selection mismatch")
+            fp=sorted(p for p in (ROOT/"funding"/symbol).glob("*.parquet") if "2021-01"<=p.stem<="2024-12")
+            require(len(fp)==48,"Funding partitions missing")
+            parts=[];sources=list(paths)+fp
+            for p in fp:
+                x=pl.read_parquet(p).select("event_time","funding_rate","funding_interval_hours")
+                mp=ROOT/"mark"/symbol/p.name;sources.append(mp)
+                m=pl.read_parquet(mp,columns=["event_time","open"]).rename({"event_time":"minute","open":"mark_price"})
+                parts.append(x.with_columns((pl.col("event_time")//MIN*MIN).alias("minute")).join(m,on="minute",how="left",validate="m:1"))
+            require(digest(sources+[Path("multi_asset_funding_engine.py"),Path("execution_engine.py")])==ref["source_hash"],"Report 40 source hash changed")
+            fund=pl.concat(parts).filter(pl.col("event_time").is_between(A,B,closed="left")).sort("event_time")
+            ts=fund["event_time"].to_numpy();step=8*3600000;grid=((ts+MIN//2)//step)*step
+            require(np.array_equal(grid,np.arange(A,B,step)) and np.all(np.abs(ts-grid)<=MIN) and (fund["funding_interval_hours"]==8).fill_null(False).all(),"Funding schedule mismatch")
+            require(fund["funding_rate"].is_finite().fill_null(False).all(),"Invalid funding rate")
+            valid=pl.col("mark_price").is_finite().fill_null(False)&(pl.col("mark_price")>0).fill_null(False)
+            missing=fund.filter(~valid)["event_time"].to_numpy()
+            require(not np.any(np.searchsorted(missing,t["label_end"].to_numpy(),side="right")>np.searchsorted(missing,t["entry_time"].to_numpy(),side="right")),"Missing settlement mark affects trade")
+            fund=fund.filter(valid).with_columns(pl.lit(symbol).alias("symbol")).select("symbol","event_time","funding_rate","mark_price")
+            coverage=mark_audit(t);out["mark_coverage"][symbol]=coverage
+            require(coverage["affected_trades"]==0,"Missing intratrade marks; inspect coverage")
+            for fee,slip in [(5,1),(10,5)]:
+                scored=score_trades(t,fee,slip,fund,{symbol:[(A,B)]})
+                expected=next(v for v in ref["economics"] if v["fee_bps"]==fee and v["slippage_bps"]==slip)
+                require(scored.height==expected["trades"] and np.isclose(scored["net_return"].sum(),expected["pnl"],atol=1e-10),"Report 40 reconciliation failed")
+                for frac in (.25,.5,1.):
+                    result=replay(scored,fund,frac,first,last,fee/10000)
+                    result.pop("minute_equity")
+                    row["scenarios"].append({"fee_bps":fee,"slippage_bps":slip,**result})
+            row["status"]="pass"
+        except Exception:row.update(status="fail",error=traceback.format_exc())
+        print(symbol,row["status"],flush=True)
+    require(all(r["status"]=="pass" for r in out["results"]),"One or more assets blocked; inspect per-symbol results")
+
 def main():
     import argparse
-    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit','invalidation'],default='incumbent');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--candidate',choices=['incumbent','compare','exit','invalidation','alt'],default='incumbent');args=p.parse_args()
     out={"scope":"Development diagnostic, fixed fractions not optimized; minute-open marks, actual assumed funding boundary (entry,exit], no liquidation or margin tiers; no intra-minute extrema or executable mark fills."}
     try:
-        ({"compare":audit_cost_aware,"exit":audit_exit,"invalidation":lambda o:audit_exit(o,True),"incumbent":audit}[args.candidate])(out);out["status"]="pass"
+        ({"compare":audit_cost_aware,"exit":audit_exit,"invalidation":lambda o:audit_exit(o,True),"incumbent":audit,"alt":audit_alt}[args.candidate])(out);out["status"]="pass"
     except Exception:out["status"]="fail";out["error"]=traceback.format_exc()
-    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","invalidation":"37_early_invalidation.zip","incumbent":"10_portfolio.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
+    p=ROOT/"reports"/({"compare":"35_candidate_portfolio.zip","exit":"36_time_exit.zip","invalidation":"37_early_invalidation.zip","incumbent":"10_portfolio.zip","alt":"41_alt_portfolio.zip"}[args.candidate]);p.parent.mkdir(parents=True,exist_ok=True)
     tmp=p.with_suffix(".tmp")
     with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:z.writestr("metrics.json",json.dumps(out,allow_nan=False))
     tmp.replace(p);print(p,out["status"])
