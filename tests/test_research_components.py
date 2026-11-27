@@ -208,3 +208,27 @@ def test_transfer_local_funding_spans_do_not_bridge_gap(tmp_path,monkeypatch):
     assert rows[0]["outcome_status"]=="scored"
     assert rows[1]["outcome_status"]=="unverified_funding_schedule"
     assert rows[1]["standard"] is None
+
+
+def test_transfer_temporal_funding_uses_requested_calendar(tmp_path,monkeypatch):
+    import research_engine as r
+    from data_engine import date,ms
+    import numpy as np
+    monkeypatch.setattr(r,"ROOT",tmp_path)
+    a,b=ms(date("2025-01-01")),ms(date("2025-01-02"))
+    ts=np.arange(a,b,8*r.H).tolist()
+    p=tmp_path/"funding"/"BTCUSDT"/"2025-01.parquet"
+    p.parent.mkdir(parents=True)
+    pl.DataFrame({"event_time":ts,"funding_rate":[.001]*3,
+                  "funding_interval_hours":[8]*3}).write_parquet(p)
+    q=tmp_path/"mark"/"BTCUSDT"/"2025-01.parquet"
+    q.parent.mkdir(parents=True)
+    pl.DataFrame({"event_time":ts,"open":[100.]*3}).write_parquet(q)
+    fund,spans=r.transfer_funding("BTCUSDT",a,b)
+    assert spans==[(a,b)]
+    assert fund[0].height==3
+    # A trade after the last verified event is covered only within the complete requested grid.
+    rows=[{"symbol":"BTCUSDT","entry_time":a+18*r.H,"label_end":a+22*r.H,
+           "entry_price":100.,"exit_price":101.,"side":1}]
+    r.transfer_score(rows,fund,spans)
+    assert rows[0]["outcome_status"]=="scored"
