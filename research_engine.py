@@ -3,7 +3,8 @@ Historical experiment scripts remain intact. One batch report per protocol.
 """
 import os
 os.environ.setdefault("POLARS_MAX_THREADS","1")
-import json, zipfile, traceback, hashlib, time, inspect
+import json, zipfile, traceback, hashlib, time, inspect, gc, io
+import psutil
 from pathlib import Path
 import numpy as np
 import polars as pl
@@ -414,16 +415,29 @@ def evaluate_edge(signals,funds,first,last,fee,slip):
             "per_symbol_nonoverlap":nonoverlap_stats,"unknown_funding_outcomes":unknown,
             "note":"All opportunities retained; overlapping returns are not independent; known-only results conditional if any funding is missing; no allocation or shared equity."}
 
+def memory_preflight(stage,additional_mib=512):
+    """Single-worker incremental budget after imports; estimate, not a measured peak."""
+    reserve_mib=512
+    vm=psutil.virtual_memory()
+    available=vm.available
+    required=(additional_mib+reserve_mib)*1024**2
+    print(f"RAM {stage}: available {available//1024**2} MiB / estimated minimum {required//1024**2} MiB; process tree {tree_rss()//1024**2} MiB",flush=True)
+    try:
+        budget(1,per_worker_bytes=additional_mib*1024**2,reserve_bytes=reserve_mib*1024**2,threads_per_worker=1)
+    except MemoryError as e:
+        raise MemoryError(f"{stage}: {available//1024**2} MiB available; estimated minimum {required//1024**2} MiB. Close unused apps and resume the same command. Completed folds remain cached.") from e
+
 def run(assets):
     import portalocker
     started=time.monotonic()
-    budget(1,per_worker_bytes=1024**3,threads_per_worker=1)
     root=ROOT/"research_v2";root.mkdir(parents=True,exist_ok=True)
     out={"protocol":SPEC,"assets_requested":assets,"scope":"Nested historical signal-edge search, not independent holdout. No shared-wallet allocation, capital limits or live orders. Five-asset default is a readiness pilot, not a survivorship-free universe.","assets":[],"edge_results":[]}
     report=ROOT/"reports"/"research_batch.zip";report.parent.mkdir(parents=True,exist_ok=True)
-    signal_ledger={}
+    signal_ledger={};fold_artifacts=[]
     with portalocker.Lock(str(root/"coordinator.lock"),timeout=0):
         try:
+            memory_preflight("startup")
+            out["memory_policy"]={"workers":1,"startup_and_dataset_additional_mib":512,"new_fold_additional_mib":256,"reserve_mib":512,"estimated_not_measured":True}
             gate=read_report("45_reproducibility.zip")
             require(gate["status"]=="pass","Frozen candidate reproducibility gate failed")
             folder,=list((ROOT/"experiments").glob("6823506d*"))
@@ -468,24 +482,40 @@ def run(assets):
                     row["unknown_funding_event_times"]=funding[1][np.diff(funding[3])>0].tolist()
                     cache_id=identity({"raw":raw_hash,"builder":builder_code,"polars":pl.__version__,"numpy":np.__version__,"TFS":TFS,"features":COLS,"horizons":HORIZONS})
                     completed=root/"folds"/row["identity"]
-                    ds=None if all((completed/(str(f.fold_id)+".json")).exists() for f in folds) else build(symbol,raw,funding,root/"datasets"/cache_id)
+                    ds=None
+                    if not all((completed/(str(f.fold_id)+".json")).exists() for f in folds):
+                        gc.collect();memory_preflight(symbol+" dataset")
+                        ds=build(symbol,raw,funding,root/"datasets"/cache_id)
                     signals=[];base=[];family_rows={m:[] for m in families}
                     for fold in folds:
+                        fold_path=completed/(str(fold.fold_id)+".json")
+                        if not fold_path.exists():
+                            # Do not interrupt a fit; checkpoint boundary is safe for resume.
+                            if psutil.virtual_memory().available<768*1024**2:
+                                gc.collect();memory_preflight(symbol+" fold "+str(fold.fold_id),256)
                         result=checkpoint(root/"folds",key,fold.fold_id,lambda:search_fold(symbol,ds,fold,fit_baseline))
+                        detail_name=f"folds/{symbol}/{fold.fold_id}.json"
+                        fold_artifacts.append((fold_path,detail_name))
                         signals.extend(result["signals"]);base.extend(result["baseline"])
                         for m in families:family_rows[m].extend(result["family_signals"][m])
-                        row["folds"].append({**{k:v for k,v in result.items() if k not in ("signals","family_signals","baseline")},"outer_signals":len(result["signals"]),"family_outer_signals":{m:len(v) for m,v in result["family_signals"].items()},"new_baseline_signals":len(result["baseline"])})
+                        row["folds"].append({**{k:v for k,v in result.items() if k not in ("signals","family_signals","baseline","trials")},"trial_count":len(result["trials"]),"detail_file":detail_name,"outer_signals":len(result["signals"]),"family_outer_signals":{m:len(v) for m,v in result["family_signals"].items()},"new_baseline_signals":len(result["baseline"])})
+                        del result
                         print(symbol,"fold",fold.fold_id,"done",flush=True)
                     if not fit_baseline:base=baseline_signals(symbol,paths,funding,folds)
                     all_signals.extend(signals);baseline.extend(base);funds[symbol]=funding
                     for m in families:families[m].extend(family_rows[m])
                     row.update(status="pass",outer_signals=len(signals),baseline_signals=len(base),rss_bytes=tree_rss())
                     del ds
+                except MemoryError:
+                    row.update(status="blocked_memory",error=traceback.format_exc());print(symbol,"paused: insufficient RAM",flush=True)
+                    out["resume_required"]=True
+                    break
                 except Exception:
                     row.update(status="fail",error=traceback.format_exc());print(symbol,"blocked",flush=True)
                 finally:
                     ds=None
-            require(funds,"No asset completed")
+                    gc.collect()
+            require(funds,"No asset completed; inspect per-symbol errors and resume")
             out["assets_completed"]=list(funds)
             signal_ledger={"fixed_binary":baseline,"nested_joint_search":all_signals,**{"nested_"+m:v for m,v in families.items()}}
             for name,signals in signal_ledger.items():
@@ -494,13 +524,18 @@ def run(assets):
                     try:row.update(evaluate_edge(signals,funds,first,last,fee,slip))
                     except Exception:row.update(status="blocked",error=traceback.format_exc())
                     print(name,fee,slip,row["status"],flush=True)
-            out["status"]="pass" if all(r["status"]=="pass" for r in out["assets"]+out["edge_results"]) else "partial"
+            out["status"]="pass" if len(funds)==len(assets) and all(r["status"]=="pass" for r in out["assets"]+out["edge_results"]) else "partial"
         except Exception:out.update(status="fail",error=traceback.format_exc())
         out["elapsed_seconds"]=time.monotonic()-started
         tmp=report.with_suffix(".tmp")
         with zipfile.ZipFile(tmp,"w",zipfile.ZIP_DEFLATED) as z:
-            z.writestr("metrics.json",json.dumps(out,allow_nan=False))
-            z.writestr("signals.json",json.dumps(signal_ledger,allow_nan=False))
+            # Stream large details from existing checkpoints; do not retain all trial dicts
+            # in RAM or construct a single large JSON string for signal exports.
+            for path,name in fold_artifacts:z.write(path,name)
+            for name,obj in (("metrics.json",out),("signals.json",signal_ledger)):
+                with z.open(name,"w") as binary:
+                    with io.TextIOWrapper(binary,encoding="utf-8") as stream:
+                        json.dump(obj,stream,allow_nan=False)
         tmp.replace(report);print(report,out["status"],flush=True)
     return 0 if out["status"]=="pass" else 1
 
